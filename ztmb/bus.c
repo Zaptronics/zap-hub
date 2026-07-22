@@ -233,6 +233,31 @@ bool bus_i2c_send_byte(bus_i2c_t *port, uint8_t cmd)
     return written == 1;
 }
 
+bool bus_i2c_probe(bus_i2c_t *port)
+{
+    int index = -1;
+    if (!i2c_transaction_begin(port, &index)) {
+        return false;
+    }
+
+    /*
+     * The Pico SDK bus-scan example uses a one-byte dummy read to obtain an
+     * address ACK without writing a register value. The returned byte is
+     * intentionally discarded. A diagnostic scan may advance a device's
+     * internal read pointer or clear a read-to-clear register, so callers
+     * should use this only for bench discovery and reinitialize afterward.
+     */
+    uint8_t discard = 0;
+    int read = i2c_read_timeout_us(port->i2c,
+                                  port->addr,
+                                  &discard,
+                                  1,
+                                  false,
+                                  port->config.timeout_us);
+    i2c_transaction_end(index);
+    return read == 1;
+}
+
 bool bus_i2c_write_n(bus_i2c_t *port, uint8_t reg, const uint8_t *value, size_t len)
 {
     if (!port || (!value && len > 0) || len > (BUS_I2C_MAX_WRITE_BYTES - 1u)) {

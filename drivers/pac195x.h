@@ -203,6 +203,16 @@ typedef struct {
     int64_t  power_uW;   // computed from vbus_uV and current_uA
 } pac195x_channel_reading_t;
 
+/*
+ * One PAC ADC input used directly as a shunt-voltage measurement. This is
+ * useful on PAC195X-2 devices where VBUS+/- is independent of VSENSE+/-.
+ */
+typedef struct {
+    uint16_t raw;
+    int32_t shunt_uV;
+    int32_t current_uA;
+} pac195x_shunt_reading_t;
+
 // ----------------------------
 // Public API
 // ----------------------------
@@ -214,11 +224,30 @@ int pac195x_refresh(pac195x_t *dev, pac195x_refresh_kind_t kind, bool wait_1ms);
 // Refresh the cached active registers (CTRL_ACT, NEG_PWR_FSR_ACT, ACCUM_CONFIG_ACT)
 int pac195x_read_active_config(pac195x_t *dev);
 
-// Read one channel. If averaged=true, reads VBUSn_AVG/VSENSEn_AVG.
+// Read one native PAC channel. If averaged=true, reads VBUSn_AVG/VSENSEn_AVG.
 int pac195x_read_channel(pac195x_t *dev, uint8_t ch_1based, bool averaged, pac195x_channel_reading_t *out);
 
-// Convenience: latch with REFRESH_V, wait, then read all channels.
+/*
+ * Read only one ADC input and interpret it as a voltage across shunt_uohm.
+ * These helpers do not read or use VPOWER because the paired VBUS/VSENSE pins
+ * may be wired to different physical loads on a salvage or mixed topology.
+ */
+int pac195x_read_vbus_shunt(pac195x_t *dev,
+                            uint8_t ch_1based,
+                            bool averaged,
+                            uint32_t shunt_uohm,
+                            pac195x_shunt_reading_t *out);
+int pac195x_read_vsense_shunt(pac195x_t *dev,
+                              uint8_t ch_1based,
+                              bool averaged,
+                              uint32_t shunt_uohm,
+                              pac195x_shunt_reading_t *out);
+
+// Convenience: latch with REFRESH_V, wait, then read all native channels.
 int pac195x_read_all_snapshot(pac195x_t *dev, bool averaged, pac195x_channel_reading_t out[4]);
+
+/* ALERT_STATUS is a 24-bit read/clear register. */
+int pac195x_read_alert_status(pac195x_t *dev, uint32_t *status24);
 
 // Accumulator reads
 int pac195x_read_acc_count(pac195x_t *dev, uint32_t *acc_count);

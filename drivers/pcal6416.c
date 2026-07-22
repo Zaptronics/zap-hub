@@ -93,6 +93,24 @@ bool pcal6416a_write_pin(pcal6416a_t *dev, uint8_t pin, bool level) {
     return pcal6416a_write_reg(dev, reg_addr, *out_reg);
 }
 
+bool pcal6416a_set_pin_direction(pcal6416a_t *dev, uint8_t pin, bool input) {
+    if (!dev || pin > 15) return false;
+
+    uint8_t port = (pin < 8) ? 0u : 1u;
+    uint8_t bit = pin & 0x07u;
+    uint8_t mask = (uint8_t)(1u << bit);
+    uint8_t *cfg = (port == 0u) ? &dev->cfg0 : &dev->cfg1;
+    uint8_t reg = (port == 0u) ? PCAL6416A_REG_CONFIG0 : PCAL6416A_REG_CONFIG1;
+
+    if (input) {
+        *cfg |= mask;
+    } else {
+        *cfg &= (uint8_t)~mask;
+    }
+
+    return pcal6416a_write_reg(dev, reg, *cfg);
+}
+
 bool pcal6416a_read_pin(pcal6416a_t *dev, uint8_t pin, bool *level_out) {
     if (!level_out || pin > 15) return false;
 

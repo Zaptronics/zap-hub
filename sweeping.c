@@ -22,16 +22,16 @@ int sweeping_init(void)
 
     g_hv_state_requested = -1;
     g_hv_state_actual = -1;
-    if (!ztm_psu_hv_set_voltage(device, 0)) {
-        return -2;
-    }
-    return ztm_psu_hv_enable(device, false) ? 0 : -3;
+    return ztm_psu_hv_stop(device) ? 0 : -2;
 }
 
 int sweeping_set_state(int new_state)
 {
     if (new_state > 255) {
         new_state = 255;
+    }
+    if (new_state < -1) {
+        new_state = -1;
     }
     g_hv_state_requested = new_state;
     return g_hv_state_requested;
@@ -49,18 +49,18 @@ int sweeping_update(void)
     }
 
     if (g_hv_state_requested < 0) {
-        if (!ztm_psu_hv_set_voltage(device, 0) || !ztm_psu_hv_enable(device, false)) {
+        if (!ztm_psu_hv_stop(device)) {
             return -2;
         }
         g_hv_state_actual = -1;
         return 0;
     }
 
-    if (!ztm_psu_hv_set_voltage(device, (uint8_t)g_hv_state_requested)) {
+    if (!ztm_psu_hv_start(device,
+                          (uint8_t)g_hv_state_requested,
+                          ZTM_PSU_HV_DEFAULT_PGOOD_TIMEOUT_MS)) {
+        g_hv_state_actual = -1;
         return -3;
-    }
-    if (!ztm_psu_hv_enable(device, true)) {
-        return -4;
     }
 
     g_hv_state_actual = g_hv_state_requested;

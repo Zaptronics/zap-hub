@@ -137,6 +137,8 @@ bool bus_i2c_init(bus_i2c_t *port,
                   const bus_i2c_config_t *config);
 bool bus_i2c_set_config(bus_i2c_t *port, const bus_i2c_config_t *config);
 bool bus_i2c_send_byte(bus_i2c_t *port, uint8_t cmd);
+/* Address-only diagnostic probe implemented as a one-byte dummy read. */
+bool bus_i2c_probe(bus_i2c_t *port);
 bool bus_i2c_write_n(bus_i2c_t *port, uint8_t reg, const uint8_t *value, size_t len);
 bool bus_i2c_read_n(bus_i2c_t *port, uint8_t reg, uint8_t *value, size_t len);
 bool bus_i2c_write(bus_i2c_t *port, uint8_t reg, uint8_t value);

@@ -101,7 +101,7 @@ int sx1509_software_reset(sx1509_t *dev) {
     if (rc != SX1509_OK) return rc;
     rc = sx1509_reg_write8(dev, SX1509_REG_RESET, 0x34);
     if (rc != SX1509_OK) return rc;
-    sleep_ms(2);
+    busy_wait_ms(2);
     return SX1509_OK;
 }
 

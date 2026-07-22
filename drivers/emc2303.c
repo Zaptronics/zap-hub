@@ -3,7 +3,6 @@
 #include "pico/stdlib.h"
 #include "emc2303.h"
 #include "ztmb/log.h"
-#include "ztmb/io_exp.h"
 
 /* ---------- internal helpers ---------- */
 
@@ -148,15 +147,15 @@ int emc2303_pwm1_toggle_test(emc2303_t *dev)
     /* Now you should see PWM on the PWM1 pin (with a pull-up present) */
     int rc = emc2303_reg_write8(dev, EMC2303_REG_FAN_DRIVE_SETTING(2), 0x00);
     if (rc != EMC2303_OK) return rc;
-    sleep_ms(500);
+    busy_wait_ms(500);
 
     rc = emc2303_reg_write8(dev, EMC2303_REG_FAN_DRIVE_SETTING(2), 0xFF);
     if (rc != EMC2303_OK) return rc;
-    sleep_ms(500);
+    busy_wait_ms(500);
 
     rc = emc2303_reg_write8(dev, EMC2303_REG_FAN_DRIVE_SETTING(2), 0x80);
     if (rc != EMC2303_OK) return rc;
-    sleep_ms(500);
+    busy_wait_ms(500);
 
     return EMC2303_OK;
 }
@@ -172,7 +171,7 @@ int emc2303_init(emc2303_t *dev, i2c_inst_t *i2c, uint8_t addr_7bit) {
     if (!dev || !bus_i2c_init(&dev->i2c_bus,
                               i2c,
                               addr_7bit,
-                              EX_I2C_ALT_EN_1,
+                              -1,
                               &i2c_config)) {
         return EMC2303_E_BAD_ARG;
     }

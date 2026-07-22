@@ -32,6 +32,8 @@ int modules_init_all(bool rollback_on_fail);
 int modules_poll_all(void);
 int modules_deinit_all(void);
 module_entry_t *modules_find_by_short_name(const char *short_name);
+int modules_reinitialize_by_short_name(const char *short_name);
+int modules_deinitialize_by_short_name(const char *short_name);
 
 /* Read-only registry inspection for diagnostics and console tooling. */
 size_t modules_count(void);

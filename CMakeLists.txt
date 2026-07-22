@@ -8,7 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Initialise pico_sdk from installed location
 # (note this can come from environment, CMake cache etc)
- 
+
 # == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})
@@ -88,14 +88,23 @@ set(PICO_BOARD pico2_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(Hub C CXX ASM) 
+project(Hub C CXX ASM)
+
+set(HUB_FIRMWARE_VERSION "0.2.11")
+set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
+configure_file(
+    ${CMAKE_CURRENT_LIST_DIR}/firmware_version.h.in
+    ${HUB_GENERATED_DIR}/firmware_version.h
+    @ONLY
+)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# Add executable. Default name is the project name, version 0.1
+# Add executable. Firmware version is defined once above and exported to code.
 
-add_executable(Hub 
+add_executable(Hub
     Hub.c
     cooling.c
     pumping.c
@@ -130,7 +139,7 @@ add_executable(Hub
 )
 
 pico_set_program_name(Hub "Hub")
-pico_set_program_version(Hub "0.1")
+pico_set_program_version(Hub "${HUB_FIRMWARE_VERSION}")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(Hub 1)
@@ -146,6 +155,7 @@ target_link_libraries(Hub
 # Add the standard include files to the build
 target_include_directories(Hub PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
+        ${HUB_GENERATED_DIR}
 )
 
 # For sys_thread_new / netconn API you also need:
@@ -155,10 +165,10 @@ target_link_libraries(Hub
 )
 
 # Add any user requested libraries
-target_link_libraries(Hub 
+target_link_libraries(Hub
         hardware_spi
         hardware_i2c
-        
+
         )
 
 pico_add_extra_outputs(Hub)
@@ -182,5 +192,3 @@ target_compile_definitions(Hub PRIVATE
 #    -Wpedantic
 #    -Wno-unused-parameter
 #)
-
-

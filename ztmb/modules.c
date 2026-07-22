@@ -15,25 +15,25 @@
 static module_entry_t g_modules[] = {
     {
         .short_name = "ztm_adc",
-        .long_name  = "AD7124 ADC (on SPI)",
+        .long_name  = "AD7124-8 temperature ADC (3 TC, CJC Pt1000, 8 RTD)",
         .init       = ztm_adc_init,
         .bus_ctx    = (void *)ZTMB_SPI1_PORT,
         .mod_inst   = &ztm_adc_1,
         .addr       = ZTMB_ADC_CS_2,
         .en_pin     = EX_NONE,
-        .poll       = NULL,
-        .deinit     = NULL,
+        .poll       = ztm_adc_poll,
+        .deinit     = ztm_adc_deinit,
     },
     {
         .short_name = "ztm_psu_hv",
-        .long_name  = "High Voltage PSU (AD5282 digital potentiometer on I2C)",
+        .long_name  = "High Voltage PSU (AD5282 setpoint, PG/EN, TLA2518 VSENSE)",
         .init       = ztm_psu_hv_init,
         .bus_ctx    = (void *)ZTMB_I2C0_PORT,
         .mod_inst   = &ztm_psu_hv_1,
         .addr       = 0x00,
         .en_pin     = EX_HV_EN_1,
-        .poll       = NULL,
-        .deinit     = NULL,
+        .poll       = ztm_psu_hv_poll,
+        .deinit     = ztm_psu_hv_deinit,
     },
     {
         .short_name = "ztm_stepper",
@@ -48,14 +48,14 @@ static module_entry_t g_modules[] = {
     },
     {
         .short_name = "ztm_pwm",
-        .long_name  = "PWM fan controller (EMC2303 on I2C)",
+        .long_name  = "12-channel PWM/current/fan/GPIO module (SX1509, PAC195x, EMC2303)",
         .init       = ztm_pwm_init,
         .bus_ctx    = (void *)ZTMB_I2C0_PORT,
         .mod_inst   = &ztm_pwm_1,
         .addr       = 0x00,
-        .en_pin     = EX_NONE,
-        .poll       = NULL,
-        .deinit     = NULL,
+        .en_pin     = EX_I2C_ALT_EN_1,
+        .poll       = ztm_pwm_poll,
+        .deinit     = ztm_pwm_deinit,
     },
     {
         .short_name = "psu_tec_1",
@@ -185,6 +185,63 @@ int modules_deinit_all(void)
     }
 
     return errors;
+}
+
+
+static int module_index_by_short_name(const char *short_name)
+{
+    if (!short_name) {
+        return -1;
+    }
+    for (size_t i = 0; i < MODULE_COUNT; i++) {
+        if (g_modules[i].short_name && strcmp(g_modules[i].short_name, short_name) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+int modules_deinitialize_by_short_name(const char *short_name)
+{
+    int index = module_index_by_short_name(short_name);
+    if (index < 0) {
+        return -1;
+    }
+
+    module_entry_t *module = &g_modules[index];
+    int rc = 0;
+    if (module->deinit) {
+        rc = module->deinit();
+    }
+    g_module_inited[index] = false;
+    return rc;
+}
+
+int modules_reinitialize_by_short_name(const char *short_name)
+{
+    int index = module_index_by_short_name(short_name);
+    if (index < 0) {
+        return -1;
+    }
+
+    module_entry_t *module = &g_modules[index];
+    if (module->deinit) {
+        (void)module->deinit();
+    }
+    g_module_inited[index] = false;
+
+    if (!module->init) {
+        return -2;
+    }
+
+    int rc = module->init(module->mod_inst, module->bus_ctx, module->addr, module->en_pin);
+    if (rc == 0) {
+        g_module_inited[index] = true;
+        log_printf("Module ready: %s\n", module->short_name);
+    } else {
+        log_printf("Module reinit failed: %s, rc=%d\n", module->short_name, rc);
+    }
+    return rc;
 }
 
 module_entry_t *modules_find_by_short_name(const char *short_name)

@@ -72,6 +72,9 @@ bool pcal6416a_init(pcal6416a_t *dev, i2c_inst_t *i2c, uint8_t addr_7bit);
  */
 bool pcal6416a_write_pin(pcal6416a_t *dev, uint8_t pin, bool level);
 
+/** Configure one pin direction. input=true selects input; false selects output. */
+bool pcal6416a_set_pin_direction(pcal6416a_t *dev, uint8_t pin, bool input);
+
 /**
  * Read the logic level of a pin (0..15).
  * Works for both inputs and outputs (it uses the INPUT registers).

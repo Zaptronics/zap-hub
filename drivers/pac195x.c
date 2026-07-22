@@ -1,5 +1,6 @@
 // pac195x.c
 #include "pac195x.h"
+#include "pico/stdlib.h"
 
 
 #define PAC195X_MID_EXPECTED 0x54u
@@ -18,7 +19,7 @@ static uint8_t channels_from_pid(uint8_t pid) {
         case 0x79: case 0x7D: return 2; // 1952-1 / 1952-2
         case 0x7A: case 0x7E: return 3; // 1953-1 / 1953-2
         case 0x7B: case 0x7F: return 4; // 1954-1 / 1954-2
-        default: return 4; // safest fallback
+        default: return 0;
     }
 }
 
@@ -93,10 +94,48 @@ static int32_t vsense_raw_to_uV(pac195x_vsense_range_t cfg, uint16_t raw) {
     }
 }
 
-static int32_t current_uA_from_vsense_uV(int32_t vsense_uV, uint32_t shunt_uohm) {
+static int32_t current_uA_from_shunt_uV(int32_t shunt_uV, uint32_t shunt_uohm) {
     if (shunt_uohm == 0) return 0;
-    // I[A] = uV/uΩ. Convert to uA => *1e6
-    return (int32_t)(((int64_t)vsense_uV * 1000000ll) / (int64_t)shunt_uohm);
+    // I[A] = uV/uΩ. Convert to uA => *1e6.
+    return (int32_t)(((int64_t)shunt_uV * 1000000ll) / (int64_t)shunt_uohm);
+}
+
+static int32_t current_uA_from_vbus_raw(pac195x_vbus_range_t cfg,
+                                        uint16_t raw,
+                                        uint32_t shunt_uohm) {
+    if (shunt_uohm == 0u) return 0;
+
+    int64_t code = raw;
+    int64_t fsr_uV = 32000000ll;
+    int64_t denominator = 65536ll;
+    if (cfg == PAC195X_VBUS_BIPOLAR_32V) {
+        code = (int16_t)raw;
+        denominator = 32768ll;
+    } else if (cfg == PAC195X_VBUS_BIPOLAR_16V) {
+        code = (int16_t)raw;
+    }
+
+    return (int32_t)((code * fsr_uV * 1000000ll) /
+                     (denominator * (int64_t)shunt_uohm));
+}
+
+static int32_t current_uA_from_vsense_raw(pac195x_vsense_range_t cfg,
+                                          uint16_t raw,
+                                          uint32_t shunt_uohm) {
+    if (shunt_uohm == 0u) return 0;
+
+    int64_t code = raw;
+    int64_t fsr_uV = 100000ll;
+    int64_t denominator = 65536ll;
+    if (cfg == PAC195X_VSENSE_BIPOLAR_100mV) {
+        code = (int16_t)raw;
+        denominator = 32768ll;
+    } else if (cfg == PAC195X_VSENSE_BIPOLAR_50mV) {
+        code = (int16_t)raw;
+    }
+
+    return (int32_t)((code * fsr_uV * 1000000ll) /
+                     (denominator * (int64_t)shunt_uohm));
 }
 
 static int64_t power_uW_from_uV_uA(int32_t vbus_uV, int32_t current_uA) {
@@ -180,7 +219,7 @@ int pac195x_refresh(pac195x_t *dev, pac195x_refresh_kind_t kind, bool wait_1ms) 
 
     if (!bus_i2c_send_byte(&dev->i2c_bus, cmd)) return PAC195X_ERR_I2C;
 
-    if (wait_1ms) sleep_ms(1);
+    if (wait_1ms) busy_wait_ms(1);
     return PAC195X_OK;
 }
 
@@ -261,6 +300,7 @@ int pac195x_init(pac195x_t *dev) {
     if (dev->manufacturer_id != PAC195X_MID_EXPECTED) return PAC195X_ERR_ID;
 
     dev->channels = channels_from_pid(dev->product_id);
+    if (dev->channels == 0u) return PAC195X_ERR_ID;
 
     // Apply optional settings
     if (dev->set_smbus_settings) {
@@ -269,9 +309,12 @@ int pac195x_init(pac195x_t *dev) {
     }
 
     if (dev->set_ctrl) {
-        // If user didn’t set enabled_mask, default to all channels present enabled.
-        if (dev->enabled_mask == 0) {
-            dev->enabled_mask = (uint8_t)((1u << dev->channels) - 1u);
+        // Clamp the request to channels physically implemented by this product.
+        uint8_t present_mask = (uint8_t)((1u << dev->channels) - 1u);
+        dev->enabled_mask &= present_mask;
+        // If the caller did not select any channel, enable every implemented channel.
+        if (dev->enabled_mask == 0u) {
+            dev->enabled_mask = present_mask;
         }
         rc = apply_ctrl(dev);
         if (rc != PAC195X_OK) return rc;
@@ -293,6 +336,52 @@ int pac195x_init(pac195x_t *dev) {
 
     // Cache active values
     return pac195x_read_active_config(dev);
+}
+
+int pac195x_read_vbus_shunt(pac195x_t *dev,
+                            uint8_t ch_1based,
+                            bool averaged,
+                            uint32_t shunt_uohm,
+                            pac195x_shunt_reading_t *out) {
+    if (!dev || !out || shunt_uohm == 0u ||
+        ch_1based < 1u || ch_1based > dev->channels) {
+        return PAC195X_ERR_ARG;
+    }
+
+    uint16_t raw = 0;
+    int rc = pac195x_reg_read_u16(dev,
+                                  averaged ? reg_vbus_avg(ch_1based) : reg_vbus(ch_1based),
+                                  &raw);
+    if (rc != PAC195X_OK) return rc;
+
+    pac195x_vbus_range_t cfg = get_vb_cfg(dev->neg_pwr_fsr_act, ch_1based);
+    out->raw = raw;
+    out->shunt_uV = vbus_raw_to_uV(cfg, raw);
+    out->current_uA = current_uA_from_vbus_raw(cfg, raw, shunt_uohm);
+    return PAC195X_OK;
+}
+
+int pac195x_read_vsense_shunt(pac195x_t *dev,
+                              uint8_t ch_1based,
+                              bool averaged,
+                              uint32_t shunt_uohm,
+                              pac195x_shunt_reading_t *out) {
+    if (!dev || !out || shunt_uohm == 0u ||
+        ch_1based < 1u || ch_1based > dev->channels) {
+        return PAC195X_ERR_ARG;
+    }
+
+    uint16_t raw = 0;
+    int rc = pac195x_reg_read_u16(dev,
+                                  averaged ? reg_vsense_avg(ch_1based) : reg_vsense(ch_1based),
+                                  &raw);
+    if (rc != PAC195X_OK) return rc;
+
+    pac195x_vsense_range_t cfg = get_vs_cfg(dev->neg_pwr_fsr_act, ch_1based);
+    out->raw = raw;
+    out->shunt_uV = vsense_raw_to_uV(cfg, raw);
+    out->current_uA = current_uA_from_vsense_raw(cfg, raw, shunt_uohm);
+    return PAC195X_OK;
 }
 
 int pac195x_read_channel(pac195x_t *dev, uint8_t ch_1based, bool averaged, pac195x_channel_reading_t *out) {
@@ -320,7 +409,7 @@ int pac195x_read_channel(pac195x_t *dev, uint8_t ch_1based, bool averaged, pac19
     int32_t vsense_uV = vsense_raw_to_uV(vs_cfg, vsense_raw);
 
     uint32_t shunt = dev->shunt_uohm[ch_1based - 1u];
-    int32_t current_uA = current_uA_from_vsense_uV(vsense_uV, shunt);
+    int32_t current_uA = current_uA_from_vsense_raw(vs_cfg, vsense_raw, shunt);
     int64_t power_uW = power_uW_from_uV_uA(vbus_uV, current_uA);
 
     out->vbus_raw   = vbus_raw;
@@ -349,6 +438,11 @@ int pac195x_read_all_snapshot(pac195x_t *dev, bool averaged, pac195x_channel_rea
         if (rc != PAC195X_OK) return rc;
     }
     return PAC195X_OK;
+}
+
+int pac195x_read_alert_status(pac195x_t *dev, uint32_t *status24) {
+    if (!dev || !status24) return PAC195X_ERR_ARG;
+    return pac195x_reg_read_u24(dev, PAC195X_REG_ALERT_STATUS, status24);
 }
 
 int pac195x_read_acc_count(pac195x_t *dev, uint32_t *acc_count) {

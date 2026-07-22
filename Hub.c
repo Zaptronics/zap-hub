@@ -10,6 +10,7 @@
 #include "cooling.h"
 #include "pumping.h"
 #include "sweeping.h"
+#include "firmware_version.h"
 
 static atomic_bool g_tick_1s = false;
 static bool g_sensing_ready;
@@ -46,7 +47,7 @@ int main(void)
     static struct repeating_timer timer;
     add_repeating_timer_ms(1000, tick_cb, NULL, &timer);
 
-    log_printf("Go\n");
+    log_printf("%s firmware %s\n", HUB_FIRMWARE_NAME, HUB_FIRMWARE_VERSION);
     int hub_result = ztmb_init();
     if (hub_result == 0) {
         int module_result = modules_init_all(false);
