@@ -33,6 +33,9 @@ extern "C" {
 #define EMC2303_MAX_FANS 3u
 #endif
 
+/* Saturated tach reading: no valid tach edges were captured. */
+#define EMC2303_TACH_COUNT_STALL 0x1FFFu
+
 /* ---------- Error codes ---------- */
 typedef enum {
     EMC2303_OK          = true,
@@ -141,6 +144,11 @@ typedef struct {
 
 /* ---------- Helpful enums (simple configuration) ---------- */
 typedef enum {
+    EMC2303_PWM_OUTPUT_OPEN_DRAIN = 0,
+    EMC2303_PWM_OUTPUT_PUSH_PULL  = 1,
+} emc2303_pwm_output_type_t;
+
+typedef enum {
     EMC2303_PWM_BASE_26KHZ   = 0, /* register code 00 */
     EMC2303_PWM_BASE_19K53HZ = 1, /* register code 01 */
     EMC2303_PWM_BASE_4K882HZ = 2, /* register code 10 */
@@ -195,6 +203,10 @@ int emc2303_fan_set_pwm_percent_x100(emc2303_t *dev, uint8_t fan, uint16_t perce
 
 /* Tach read */
 int emc2303_fan_get_tach_counts(emc2303_t *dev, uint8_t fan, uint16_t *tach_count13);
+int emc2303_fan_tach_counts_to_rpm(emc2303_t *dev,
+                                    uint8_t fan,
+                                    uint16_t tach_count13,
+                                    uint32_t *rpm);
 int emc2303_fan_get_rpm(emc2303_t *dev, uint8_t fan, uint32_t *rpm);
 
 /* Closed-loop RPM target (ENAG=1) */
@@ -206,6 +218,12 @@ int emc2303_fan_set_range(emc2303_t *dev, uint8_t fan, emc2303_range_t range);
 int emc2303_fan_set_poles(emc2303_t *dev, uint8_t fan, emc2303_poles_t poles);
 int emc2303_fan_set_update_interval(emc2303_t *dev, uint8_t fan, emc2303_update_t update);
 
+int emc2303_fan_set_pwm_output_type(emc2303_t *dev,
+                                      uint8_t fan,
+                                      emc2303_pwm_output_type_t type);
+int emc2303_fan_get_pwm_output_type(emc2303_t *dev,
+                                      uint8_t fan,
+                                      emc2303_pwm_output_type_t *type);
 int emc2303_set_pwm_base(emc2303_t *dev, uint8_t fan, emc2303_pwm_base_t base);
 int emc2303_set_pwm_divide(emc2303_t *dev, uint8_t fan, uint8_t divider);
 

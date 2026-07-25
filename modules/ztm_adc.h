@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "drivers/ad7124.h"
+#include "drivers/thermocouple.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,8 +42,16 @@ extern "C" {
 /* VBIAS is applied to the negative input of each floating thermocouple. */
 #define ZTM_ADC_TC_VBIAS_MASK ((uint16_t)((1u << 1) | (1u << 3) | (1u << 5)))
 
+typedef enum {
+    ZTM_ADC_SENSOR_OK = 0,
+    ZTM_ADC_SENSOR_DISCONNECTED,
+    ZTM_ADC_SENSOR_CJC_UNAVAILABLE,
+    ZTM_ADC_SENSOR_OUT_OF_RANGE,
+} ztm_adc_sensor_status_t;
+
 typedef struct {
-    bool valid;
+    bool valid;                 /* ADC transaction completed. */
+    ztm_adc_sensor_status_t status;
     uint8_t logical_index;      /* CJC = 0; external RTDs = 1..8. */
     uint8_t ad7124_channel;
     uint8_t ain_positive;
@@ -52,15 +61,19 @@ typedef struct {
 } ztm_adc_rtd_sample_t;
 
 typedef struct {
-    bool valid;
+    bool valid;                 /* ADC transaction completed. */
+    ztm_adc_sensor_status_t status;
     uint8_t logical_index;      /* Thermocouple = 1..3. */
     uint8_t ad7124_channel;
     uint8_t ain_positive;
     uint8_t ain_negative;
     uint32_t raw_code;
+    thermocouple_type_t type;
     double differential_mv;
     bool cold_junction_valid;
     double cold_junction_c;
+    double compensated_mv;
+    double temperature_c;
 } ztm_adc_tc_sample_t;
 
 
@@ -108,6 +121,7 @@ typedef struct {
 
     double reference_resistor_ohms;
     ad7124_iout_val_t rtd_excitation;
+    thermocouple_type_t thermocouple_types[ZTM_ADC_TC_COUNT];
 
     uint32_t last_error_mask;
     uint32_t error_event_count;
@@ -130,10 +144,8 @@ bool ztm_adc_read_rtd(uint8_t rtd_1based, ztm_adc_rtd_sample_t *sample);
 bool ztm_adc_read_all_rtds(ztm_adc_rtd_sample_t *cold_junction,
                             ztm_adc_rtd_sample_t samples[ZTM_ADC_RTD_COUNT]);
 
-/*
- * Thermocouple output is deliberately raw differential millivolts plus CJC.
- * Final compensated temperature requires the module/user to select a TC type.
- */
+bool ztm_adc_set_thermocouple_type(uint8_t tc_1based, thermocouple_type_t type);
+bool ztm_adc_get_thermocouple_type(uint8_t tc_1based, thermocouple_type_t *type);
 bool ztm_adc_read_thermocouple(uint8_t tc_1based, ztm_adc_tc_sample_t *sample);
 bool ztm_adc_read_all_thermocouples(ztm_adc_tc_sample_t samples[ZTM_ADC_TC_COUNT]);
 

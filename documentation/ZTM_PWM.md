@@ -100,7 +100,7 @@ A stopped channel remains configured in the SX1509 LED/PWM engine at 0% duty. Do
 
 ## Fan mapping
 
-Fan PWM/TACH is independent of the low-side load output. A four-wire fan normally needs both its load channel powered and its EMC2303 PWM signal active.
+Fan PWM/TACH is independent of the low-side load outputs. For a four-wire fan, connect red to its supply, black permanently to system ground, blue to the EMC2303 PWM output, and yellow to the EMC2303 TACH input. Do not switch the black return with a low-side load channel while PWM or TACH remains connected, because the signal lines can back-power a floating fan ground.
 
 | Logical fan | EMC2303 | Local fan |
 |---:|---:|---:|
@@ -111,7 +111,11 @@ Fan PWM/TACH is independent of the low-side load output. A four-wire fan normall
 | 5 | 2 | 2 |
 | 6 | 2 | 3 |
 
-The console supports direct percentage drive, raw 0–255 drive, raw tach counts, RPM conversion, and closed-loop RPM targets. Issuing `pwm fan`, `pwm fan-open`, `pwm fan-raw`, or `pwm fan-stop` disables closed-loop control for that fan.
+The console supports direct percentage drive, raw 0–255 drive, raw tach counts, RPM conversion, closed-loop RPM targets, and independent open-drain/push-pull selection for each fan PWM output. Issuing `pwm fan`, `pwm fan-open`, `pwm fan-raw`, or `pwm fan-stop` disables closed-loop control for that fan.
+
+The module default is push-pull for all six logical fan PWM outputs (`ZTM_PWM_FAN_DEFAULT_PUSH_PULL_MASK = 0x3F`). This is a board/module policy rather than a limitation of the generic EMC2303 driver; the mode can be changed independently for each fan at runtime. A module power cycle restores the compiled default.
+
+The EMC2303 TACH inputs do **not** provide internal pull-ups. Each yellow TACH line requires an external pull-up. Push-pull mode removes the need for an external pull-up on the blue PWM line, but it does not change the TACH requirement.
 
 ## User GPIO mapping
 
@@ -178,6 +182,7 @@ Both commands show the PAC number and the actual source input. VBUS-derived read
 
 ```text
 pwm fan <1..6> <0..100>
+pwm fan-output <1..6|all> [open-drain|push-pull]
 pwm fan-raw <1..6> <0..255>
 pwm fan-target <1..6> <rpm>
 pwm fan-open <1..6> <0..100>
@@ -186,6 +191,10 @@ pwm rpm <1..6|all>
 pwm tach <1..6|all>
 pwm fan-status [1|2|all]
 ```
+
+With no mode argument, `pwm fan-output` reads the current hardware configuration. Accepted mode aliases are `open-drain`, `open`, `od`, `push-pull`, `push`, and `pp`.
+
+The EMC2303 saturated tach value `0x1FFF` means that no valid tach edges were captured. The console reports this as `STALL` and does not convert it to the misleading 480 RPM lower-limit value.
 
 ### User GPIO tests
 

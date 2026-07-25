@@ -8,6 +8,27 @@
 
 ztm_stepper_t ztm_stepper_1;
 
+static ztm_stepper_kval_config_t stepper_default_kval_config(void)
+{
+    return (ztm_stepper_kval_config_t) {
+        .hold = ZTM_STEPPER_DEFAULT_KVAL_HOLD,
+        .run = ZTM_STEPPER_DEFAULT_KVAL_RUN,
+        .acc = ZTM_STEPPER_DEFAULT_KVAL_ACC,
+        .dec = ZTM_STEPPER_DEFAULT_KVAL_DEC,
+    };
+}
+
+static ztm_stepper_microstep_t stepper_default_microstep_mode(void)
+{
+    return ZTM_STEPPER_DEFAULT_MICROSTEP;
+}
+
+static bool stepper_microstep_valid(ztm_stepper_microstep_t mode)
+{
+    return mode >= ZTM_STEPPER_MICROSTEP_FULL &&
+           mode <= ZTM_STEPPER_MICROSTEP_ONE_TWENTY_EIGHTH;
+}
+
 static bool stepper_module_ready(const ztm_stepper_t *module, bool report)
 {
     if (!module || !module->ready || !module->spi_bus.spi ||
@@ -144,9 +165,25 @@ static bool stepper_run_all_encoded(ztm_stepper_t *module,
     return ok && ended;
 }
 
-static bool stepper_apply_verified_config(l6470_t *driver)
+static bool stepper_apply_kval_config(l6470_t *driver,
+                                      const ztm_stepper_kval_config_t *config)
 {
-    if (!driver || !l6470_ready(driver)) {
+    if (!driver || !l6470_ready(driver) || !config) {
+        return false;
+    }
+
+    return l6470_set_param(driver, L6470_REG_KVAL_HOLD, config->hold, 1) &&
+           l6470_set_param(driver, L6470_REG_KVAL_RUN, config->run, 1) &&
+           l6470_set_param(driver, L6470_REG_KVAL_ACC, config->acc, 1) &&
+           l6470_set_param(driver, L6470_REG_KVAL_DEC, config->dec, 1);
+}
+
+static bool stepper_apply_verified_config(l6470_t *driver,
+                                          const ztm_stepper_kval_config_t *config,
+                                          ztm_stepper_microstep_t microstep_mode)
+{
+    if (!driver || !l6470_ready(driver) || !config ||
+        !stepper_microstep_valid(microstep_mode)) {
         return false;
     }
 
@@ -154,14 +191,14 @@ static bool stepper_apply_verified_config(l6470_t *driver)
     const uint16_t dec = l6470_acc_from_sps2(25.0f);
     const uint16_t max_speed = (uint16_t)(500.0f * 0.065536f + 0.5f);
 
-    return l6470_set_param(driver, L6470_REG_STEP_MODE, 0x00u, 1) &&
+    return l6470_set_param(driver,
+                           L6470_REG_STEP_MODE,
+                           (uint8_t)microstep_mode,
+                           1) &&
            l6470_set_param(driver, L6470_REG_ACC, acc, 2) &&
            l6470_set_param(driver, L6470_REG_DEC, dec, 2) &&
            l6470_set_param(driver, L6470_REG_MAX_SPEED, max_speed, 2) &&
-           l6470_set_param(driver, L6470_REG_KVAL_HOLD, 0u, 1) &&
-           l6470_set_param(driver, L6470_REG_KVAL_RUN,  25u, 1) &&
-           l6470_set_param(driver, L6470_REG_KVAL_ACC,  40u, 1) &&
-           l6470_set_param(driver, L6470_REG_KVAL_DEC,  40u, 1);
+           stepper_apply_kval_config(driver, config);
 }
 
 static bool stepper_read_status_all(ztm_stepper_t *module,
@@ -248,7 +285,9 @@ static bool stepper_apply_verified_config_all(ztm_stepper_t *module)
     }
 
     for (size_t i = 0; i < ZTM_STEPPER_DRIVER_COUNT; i++) {
-        if (!stepper_apply_verified_config(&module->drivers[i])) {
+        if (!stepper_apply_verified_config(&module->drivers[i],
+                                           &module->kval_config[i],
+                                           module->microstep_mode[i])) {
             return false;
         }
     }
@@ -265,6 +304,10 @@ int ztm_stepper_init(void *ztm_stepper, void *spi, int8_t cs_pin, int8_t en_pin)
     log_printf("ztm_stepper_init\n");
     ztm_stepper_t *module = (ztm_stepper_t *)ztm_stepper;
     memset(module, 0, sizeof(*module));
+    for (size_t i = 0; i < ZTM_STEPPER_DRIVER_COUNT; i++) {
+        module->kval_config[i] = stepper_default_kval_config();
+        module->microstep_mode[i] = stepper_default_microstep_mode();
+    }
 
     int result = -2;
     if (!bus_spi_init(&module->spi_bus,
@@ -393,8 +436,142 @@ bool ztm_stepper_set_param(uint8_t device_id,
                            uint8_t nbytes,
                            uint32_t value)
 {
+    uint8_t device_index;
     l6470_t *driver = stepper_driver(device_id);
-    return driver && l6470_set_param(driver, reg, value, nbytes);
+    if (!driver || !device_id_to_index(device_id, &device_index) ||
+        !l6470_set_param(driver, reg, value, nbytes)) {
+        return false;
+    }
+
+    if (nbytes == 1u && value <= UINT8_MAX) {
+        ztm_stepper_kval_config_t *config = &ztm_stepper_1.kval_config[device_index];
+        switch (reg) {
+            case L6470_REG_KVAL_HOLD: config->hold = (uint8_t)value; break;
+            case L6470_REG_KVAL_RUN:  config->run = (uint8_t)value; break;
+            case L6470_REG_KVAL_ACC:  config->acc = (uint8_t)value; break;
+            case L6470_REG_KVAL_DEC:  config->dec = (uint8_t)value; break;
+            case L6470_REG_STEP_MODE:
+                ztm_stepper_1.microstep_mode[device_index] =
+                    (ztm_stepper_microstep_t)(value & 0x07u);
+                break;
+            default: break;
+        }
+    }
+    return true;
+}
+
+bool ztm_stepper_get_kval_config(uint8_t device_id,
+                                 ztm_stepper_kval_config_t *config)
+{
+    if (!config) {
+        return false;
+    }
+
+    uint32_t hold = 0;
+    uint32_t run = 0;
+    uint32_t acc = 0;
+    uint32_t dec = 0;
+    if (!ztm_stepper_get_param(device_id, L6470_REG_KVAL_HOLD, 1, &hold) ||
+        !ztm_stepper_get_param(device_id, L6470_REG_KVAL_RUN, 1, &run) ||
+        !ztm_stepper_get_param(device_id, L6470_REG_KVAL_ACC, 1, &acc) ||
+        !ztm_stepper_get_param(device_id, L6470_REG_KVAL_DEC, 1, &dec)) {
+        return false;
+    }
+
+    config->hold = (uint8_t)hold;
+    config->run = (uint8_t)run;
+    config->acc = (uint8_t)acc;
+    config->dec = (uint8_t)dec;
+    return true;
+}
+
+bool ztm_stepper_set_kval_config(uint8_t device_id,
+                                 const ztm_stepper_kval_config_t *config)
+{
+    uint8_t device_index;
+    l6470_t *driver = stepper_driver(device_id);
+    if (!driver || !config ||
+        !device_id_to_index(device_id, &device_index) ||
+        !stepper_apply_kval_config(driver, config)) {
+        return false;
+    }
+
+    ztm_stepper_1.kval_config[device_index] = *config;
+    if (device_id == ZTM_STEPPER_UNUSED_DRIVER_ID) {
+        return l6470_hard_hiz(driver);
+    }
+    return true;
+}
+
+bool ztm_stepper_set_kval_config_all(const ztm_stepper_kval_config_t *config)
+{
+    if (!config) {
+        return false;
+    }
+
+    for (uint8_t id = 1; id <= ZTM_STEPPER_DRIVER_COUNT; id++) {
+        if (!ztm_stepper_set_kval_config(id, config)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ztm_stepper_get_microstep(uint8_t device_id,
+                               ztm_stepper_microstep_t *mode)
+{
+    if (!mode) {
+        return false;
+    }
+
+    uint32_t step_mode = 0;
+    if (!ztm_stepper_get_param(device_id, L6470_REG_STEP_MODE, 1, &step_mode)) {
+        return false;
+    }
+
+    *mode = (ztm_stepper_microstep_t)(step_mode & 0x07u);
+    return stepper_microstep_valid(*mode);
+}
+
+bool ztm_stepper_set_microstep(uint8_t device_id,
+                               ztm_stepper_microstep_t mode)
+{
+    uint8_t device_index;
+    l6470_t *driver = stepper_driver(device_id);
+    if (!driver || !stepper_microstep_valid(mode) ||
+        !device_id_to_index(device_id, &device_index)) {
+        return false;
+    }
+
+    uint32_t current_step_mode = 0;
+    if (!l6470_hard_hiz(driver) ||
+        !l6470_get_param(driver, L6470_REG_STEP_MODE, 1, &current_step_mode)) {
+        return false;
+    }
+
+    const uint8_t updated_step_mode =
+        (uint8_t)((current_step_mode & ~0x07u) | (uint8_t)mode);
+    if (!l6470_set_param(driver, L6470_REG_STEP_MODE, updated_step_mode, 1) ||
+        !l6470_reset_pos(driver)) {
+        return false;
+    }
+
+    ztm_stepper_1.microstep_mode[device_index] = mode;
+    return true;
+}
+
+bool ztm_stepper_set_microstep_all(ztm_stepper_microstep_t mode)
+{
+    if (!stepper_microstep_valid(mode)) {
+        return false;
+    }
+
+    for (uint8_t id = 1; id <= ZTM_STEPPER_DRIVER_COUNT; id++) {
+        if (!ztm_stepper_set_microstep(id, mode)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool ztm_stepper_reset(uint8_t device_id)
@@ -404,7 +581,10 @@ bool ztm_stepper_reset(uint8_t device_id)
     if (ok) {
         /* Console/HTTP commands may execute in the CYW43 IRQ callback context. */
         busy_wait_ms(1);
-        ok = stepper_apply_verified_config(driver);
+        ok = stepper_apply_verified_config(
+            driver,
+            &ztm_stepper_1.kval_config[device_id - 1u],
+            ztm_stepper_1.microstep_mode[device_id - 1u]);
         if (ok && device_id == ZTM_STEPPER_UNUSED_DRIVER_ID) {
             ok = l6470_hard_hiz(driver);
         }
@@ -492,8 +672,22 @@ bool ztm_stepper_move(uint8_t device_id, bool dir_fwd, uint32_t steps)
 
 bool ztm_stepper_apply_test_config(uint8_t device_id)
 {
+    uint8_t device_index;
     l6470_t *driver = stepper_driver(device_id);
-    bool ok = stepper_apply_verified_config(driver);
+    if (!driver || !device_id_to_index(device_id, &device_index)) {
+        return false;
+    }
+
+    if (!l6470_hard_hiz(driver)) {
+        return false;
+    }
+
+    ztm_stepper_1.kval_config[device_index] = stepper_default_kval_config();
+    ztm_stepper_1.microstep_mode[device_index] = stepper_default_microstep_mode();
+    bool ok = stepper_apply_verified_config(
+        driver,
+        &ztm_stepper_1.kval_config[device_index],
+        ztm_stepper_1.microstep_mode[device_index]);
     if (ok && device_id == ZTM_STEPPER_UNUSED_DRIVER_ID) {
         ok = l6470_hard_hiz(driver);
     }
@@ -502,6 +696,14 @@ bool ztm_stepper_apply_test_config(uint8_t device_id)
 
 bool ztm_stepper_apply_test_config_all(void)
 {
+    if (!ztm_stepper_hard_hiz_all()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < ZTM_STEPPER_DRIVER_COUNT; i++) {
+        ztm_stepper_1.kval_config[i] = stepper_default_kval_config();
+        ztm_stepper_1.microstep_mode[i] = stepper_default_microstep_mode();
+    }
     return stepper_apply_verified_config_all(&ztm_stepper_1);
 }
 

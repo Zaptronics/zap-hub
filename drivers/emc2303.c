@@ -266,21 +266,25 @@ int emc2303_fan_get_tach_counts(emc2303_t *dev, uint8_t fan, uint16_t *tach_coun
                               tach_count13);
 }
 
-int emc2303_fan_get_rpm(emc2303_t *dev, uint8_t fan, uint32_t *rpm) {
+int emc2303_fan_tach_counts_to_rpm(emc2303_t *dev,
+                                      uint8_t fan,
+                                      uint16_t count13,
+                                      uint32_t *rpm) {
     if (!dev || !rpm || !fan_valid(fan)) return set_last(dev, EMC2303_E_BAD_ARG);
 
-    uint16_t count13 = 0;
-    int rc = emc2303_fan_get_tach_counts(dev, fan, &count13);
-    if (rc != EMC2303_OK) return set_last(dev, rc);
-
-    if (count13 == 0) { /* avoid divide-by-zero */
-        *rpm = 0;
+    count13 &= 0x1FFFu;
+    if (count13 == 0u || count13 == EMC2303_TACH_COUNT_STALL) {
+        /* Zero avoids divide-by-zero. 0x1FFF is the saturated/no-valid-tach
+         * reading and must not be converted into the misleading 480 RPM
+         * lower-limit value.
+         */
+        *rpm = 0u;
         return set_last(dev, EMC2303_OK);
     }
 
     /* Read FanConfig1 to get RNG (multiplier m) and EDG (poles/edges mapping) */
     uint8_t cfg1 = 0;
-    rc = emc2303_reg_read8(dev, EMC2303_REG_FAN_CONFIG1(fan), &cfg1);
+    int rc = emc2303_reg_read8(dev, EMC2303_REG_FAN_CONFIG1(fan), &cfg1);
     if (rc != EMC2303_OK) return set_last(dev, rc);
 
     uint8_t rng = (uint8_t)((cfg1 & EMC2303_FANCFG1_RNG_MASK) >> EMC2303_FANCFG1_RNG_SHIFT);
@@ -298,6 +302,16 @@ int emc2303_fan_get_rpm(emc2303_t *dev, uint8_t fan, uint32_t *rpm) {
 
     *rpm = (uint32_t)(numerator / denom);
     return set_last(dev, EMC2303_OK);
+}
+
+int emc2303_fan_get_rpm(emc2303_t *dev, uint8_t fan, uint32_t *rpm) {
+    if (!dev || !rpm || !fan_valid(fan)) return set_last(dev, EMC2303_E_BAD_ARG);
+
+    uint16_t count13 = 0u;
+    int rc = emc2303_fan_get_tach_counts(dev, fan, &count13);
+    if (rc != EMC2303_OK) return set_last(dev, rc);
+
+    return emc2303_fan_tach_counts_to_rpm(dev, fan, count13, rpm);
 }
 
 /* ---------- public: closed-loop target RPM ---------- */
@@ -388,6 +402,40 @@ int emc2303_fan_set_update_interval(emc2303_t *dev, uint8_t fan, emc2303_update_
     uint8_t v = (uint8_t)(((uint8_t)update << EMC2303_FANCFG1_UDT_SHIFT) & EMC2303_FANCFG1_UDT_MASK);
     int rc = emc2303_reg_update8(dev, EMC2303_REG_FAN_CONFIG1(fan), EMC2303_FANCFG1_UDT_MASK, v);
     return set_last(dev, rc);
+}
+
+int emc2303_fan_set_pwm_output_type(emc2303_t *dev,
+                                      uint8_t fan,
+                                      emc2303_pwm_output_type_t type) {
+    if (!dev || !fan_valid(fan) ||
+        (type != EMC2303_PWM_OUTPUT_OPEN_DRAIN &&
+         type != EMC2303_PWM_OUTPUT_PUSH_PULL)) {
+        return set_last(dev, EMC2303_E_BAD_ARG);
+    }
+
+    uint8_t mask = EMC2303_PWM_OUTPUT_TYPE_BIT(fan);
+    uint8_t value = type == EMC2303_PWM_OUTPUT_PUSH_PULL ? mask : 0u;
+    int rc = emc2303_reg_update8(dev, EMC2303_REG_PWM_OUTPUT_CONFIG, mask, value);
+    return set_last(dev, rc);
+}
+
+int emc2303_fan_get_pwm_output_type(emc2303_t *dev,
+                                      uint8_t fan,
+                                      emc2303_pwm_output_type_t *type) {
+    if (!dev || !fan_valid(fan) || !type) {
+        return set_last(dev, EMC2303_E_BAD_ARG);
+    }
+
+    uint8_t config = 0u;
+    int rc = emc2303_reg_read8(dev, EMC2303_REG_PWM_OUTPUT_CONFIG, &config);
+    if (rc != EMC2303_OK) {
+        return set_last(dev, rc);
+    }
+
+    *type = (config & EMC2303_PWM_OUTPUT_TYPE_BIT(fan)) != 0u
+                ? EMC2303_PWM_OUTPUT_PUSH_PULL
+                : EMC2303_PWM_OUTPUT_OPEN_DRAIN;
+    return set_last(dev, EMC2303_OK);
 }
 
 int emc2303_set_pwm_base(emc2303_t *dev, uint8_t fan, emc2303_pwm_base_t base) {

@@ -270,23 +270,29 @@ static bool ztm_adc_measure_rtd_unlocked(ztm_adc_t *module,
         return false;
     }
 
-    double resistance = ztm_adc_rtd_resistance_from_code(
-        code,
-        module->reference_resistor_ohms);
-    module->last_measurement.resistance_ohms = resistance;
-    double temperature = 0.0;
-    if (!ztm_adc_pt1000_temperature(resistance, &temperature)) {
-        module->last_measurement.stage = ZTM_ADC_MEASURE_SENSOR_RANGE;
-        return false;
-    }
-
     sample->valid = true;
     sample->logical_index = logical_index;
     sample->ad7124_channel = channel;
     sample->ain_positive = ain_positive;
     sample->raw_code = code;
+
+    if (code == 0u || code == AD7124_DATA_FULL_SCALE) {
+        sample->status = ZTM_ADC_SENSOR_DISCONNECTED;
+        return true;
+    }
+
+    double resistance = ztm_adc_rtd_resistance_from_code(
+        code,
+        module->reference_resistor_ohms);
+    module->last_measurement.resistance_ohms = resistance;
     sample->resistance_ohms = resistance;
-    sample->temperature_c = temperature;
+    if (!ztm_adc_pt1000_temperature(resistance, &sample->temperature_c)) {
+        module->last_measurement.stage = ZTM_ADC_MEASURE_SENSOR_RANGE;
+        sample->status = ZTM_ADC_SENSOR_OUT_OF_RANGE;
+        return true;
+    }
+
+    sample->status = ZTM_ADC_SENSOR_OK;
     return true;
 }
 
@@ -337,18 +343,40 @@ static bool ztm_adc_measure_tc_unlocked(ztm_adc_t *module,
         return false;
     }
 
-    double volts = ad7124_code_to_bipolar_voltage(code,
-                                                   ZTM_ADC_INTERNAL_REF_VOLTS,
-                                                   ZTM_ADC_TC_PGA);
     sample->valid = true;
     sample->logical_index = tc_1based;
     sample->ad7124_channel = channel;
     sample->ain_positive = g_tc_ain_positive[index];
     sample->ain_negative = g_tc_ain_negative[index];
     sample->raw_code = code;
+    sample->type = module->thermocouple_types[index];
+
+    if (code == 0u || code == AD7124_DATA_FULL_SCALE) {
+        sample->status = ZTM_ADC_SENSOR_DISCONNECTED;
+        return true;
+    }
+
+    double volts = ad7124_code_to_bipolar_voltage(code,
+                                                   ZTM_ADC_INTERNAL_REF_VOLTS,
+                                                   ZTM_ADC_TC_PGA);
     sample->differential_mv = volts * 1000.0;
     sample->cold_junction_valid = cold_junction_valid;
     sample->cold_junction_c = cold_junction_c;
+    if (!cold_junction_valid) {
+        sample->status = ZTM_ADC_SENSOR_CJC_UNAVAILABLE;
+        return true;
+    }
+
+    if (!thermocouple_compensated_temperature_c(sample->type,
+                                                  sample->differential_mv,
+                                                  cold_junction_c,
+                                                  &sample->temperature_c,
+                                                  &sample->compensated_mv)) {
+        sample->status = ZTM_ADC_SENSOR_OUT_OF_RANGE;
+        return true;
+    }
+
+    sample->status = ZTM_ADC_SENSOR_OK;
     return true;
 }
 
@@ -524,6 +552,9 @@ int ztm_adc_init(void *ctx, void *spi, int8_t cs_pin, int8_t en_pin)
     memset(module, 0, sizeof(*module));
     module->reference_resistor_ohms = ZTM_ADC_RREF_OHMS;
     module->rtd_excitation = ZTM_ADC_RTD_EXCITATION;
+    for (uint8_t tc = 0u; tc < ZTM_ADC_TC_COUNT; tc++) {
+        module->thermocouple_types[tc] = THERMOCOUPLE_TYPE_K;
+    }
 
     static const bus_spi_config_t spi_config = {
         .baud_hz = 1000000u,
@@ -795,6 +826,33 @@ bool ztm_adc_read_all_rtds(ztm_adc_rtd_sample_t *cold_junction,
     return ok;
 }
 
+bool ztm_adc_set_thermocouple_type(uint8_t tc_1based, thermocouple_type_t type)
+{
+    ztm_adc_t *module = &ztm_adc_1;
+    if (!module->ready || tc_1based < 1u || tc_1based > ZTM_ADC_TC_COUNT ||
+        type < THERMOCOUPLE_TYPE_B || type >= THERMOCOUPLE_TYPE_COUNT ||
+        !ztm_adc_try_lock(module)) {
+        return false;
+    }
+
+    module->thermocouple_types[tc_1based - 1u] = type;
+    ztm_adc_unlock(module);
+    return true;
+}
+
+bool ztm_adc_get_thermocouple_type(uint8_t tc_1based, thermocouple_type_t *type)
+{
+    ztm_adc_t *module = &ztm_adc_1;
+    if (!module->ready || !type || tc_1based < 1u ||
+        tc_1based > ZTM_ADC_TC_COUNT || !ztm_adc_try_lock(module)) {
+        return false;
+    }
+
+    *type = module->thermocouple_types[tc_1based - 1u];
+    ztm_adc_unlock(module);
+    return true;
+}
+
 bool ztm_adc_read_thermocouple(uint8_t tc_1based, ztm_adc_tc_sample_t *sample)
 {
     ztm_adc_t *module = &ztm_adc_1;
@@ -803,11 +861,12 @@ bool ztm_adc_read_thermocouple(uint8_t tc_1based, ztm_adc_tc_sample_t *sample)
     }
 
     ztm_adc_rtd_sample_t cjc;
-    bool cjc_ok = ztm_adc_measure_cjc_unlocked(module, &cjc);
+    bool cjc_read_ok = ztm_adc_measure_cjc_unlocked(module, &cjc);
+    bool cjc_valid = cjc_read_ok && cjc.status == ZTM_ADC_SENSOR_OK;
     bool ok = ztm_adc_measure_tc_unlocked(module,
                                            tc_1based,
-                                           cjc_ok,
-                                           cjc_ok ? cjc.temperature_c : NAN,
+                                           cjc_valid,
+                                           cjc_valid ? cjc.temperature_c : NAN,
                                            sample);
     ztm_adc_unlock(module);
     return ok;
@@ -821,13 +880,14 @@ bool ztm_adc_read_all_thermocouples(ztm_adc_tc_sample_t samples[ZTM_ADC_TC_COUNT
     }
 
     ztm_adc_rtd_sample_t cjc;
-    bool cjc_ok = ztm_adc_measure_cjc_unlocked(module, &cjc);
+    bool cjc_read_ok = ztm_adc_measure_cjc_unlocked(module, &cjc);
+    bool cjc_valid = cjc_read_ok && cjc.status == ZTM_ADC_SENSOR_OK;
     bool ok = true;
     for (uint8_t tc = 1u; ok && tc <= ZTM_ADC_TC_COUNT; tc++) {
         ok = ztm_adc_measure_tc_unlocked(module,
                                          tc,
-                                         cjc_ok,
-                                         cjc_ok ? cjc.temperature_c : NAN,
+                                         cjc_valid,
+                                         cjc_valid ? cjc.temperature_c : NAN,
                                          &samples[tc - 1u]);
     }
     ztm_adc_unlock(module);
@@ -850,11 +910,12 @@ bool ztm_adc_read_all(ztm_adc_rtd_sample_t *cold_junction,
                                                    rtd,
                                                    &rtds[rtd - 1u]);
     }
+    bool cjc_valid = cold_junction->status == ZTM_ADC_SENSOR_OK;
     for (uint8_t tc = 1u; ok && tc <= ZTM_ADC_TC_COUNT; tc++) {
         ok = ztm_adc_measure_tc_unlocked(module,
                                          tc,
-                                         true,
-                                         cold_junction->temperature_c,
+                                         cjc_valid,
+                                         cjc_valid ? cold_junction->temperature_c : NAN,
                                          &thermocouples[tc - 1u]);
     }
     (void)ad7124_disable_iouts(&module->adc);
@@ -1016,9 +1077,18 @@ bool ztm_adc_read_test(ztm_adc_t *module)
         return false;
     }
 
-    log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm T=%.3f C\n",
-               (unsigned long)sample.raw_code,
-               sample.resistance_ohms,
-               sample.temperature_c);
+    if (sample.status == ZTM_ADC_SENSOR_DISCONNECTED) {
+        log_printf("CJC Pt1000: raw=0x%06lX DISCONNECTED\n",
+                   (unsigned long)sample.raw_code);
+    } else if (sample.status == ZTM_ADC_SENSOR_OUT_OF_RANGE) {
+        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm OUT OF RANGE\n",
+                   (unsigned long)sample.raw_code,
+                   sample.resistance_ohms);
+    } else {
+        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm T=%.3f C\n",
+                   (unsigned long)sample.raw_code,
+                   sample.resistance_ohms,
+                   sample.temperature_c);
+    }
     return true;
 }

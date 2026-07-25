@@ -73,6 +73,9 @@ static bool valid_gpio(uint8_t gpio)
 }
 
 static bool module_set_enable(pwm_t *device, bool enabled);
+static bool fan_set_output_mode_hw(pwm_t *device,
+                                   uint8_t fan_1based,
+                                   ztm_pwm_fan_output_mode_t mode);
 
 const char *ztm_pwm_init_stage_name(ztm_pwm_init_stage_t stage)
 {
@@ -89,6 +92,7 @@ const char *ztm_pwm_init_stage_name(ztm_pwm_init_stage_t stage)
         case ZTM_PWM_INIT_EMC1: return "EMC1";
         case ZTM_PWM_INIT_EMC2: return "EMC2";
         case ZTM_PWM_INIT_FAN_SAFE_STATE: return "fan safe state";
+        case ZTM_PWM_INIT_FAN_OUTPUT_CONFIG: return "fan output config";
         case ZTM_PWM_INIT_FAN_INTERRUPTS: return "fan interrupts";
         case ZTM_PWM_INIT_CLEAR_STATUS: return "clear status";
         case ZTM_PWM_INIT_READY: return "ready";
@@ -113,6 +117,34 @@ const char *ztm_pwm_current_source_name(ztm_pwm_current_source_t source)
         case ZTM_PWM_CURRENT_SOURCE_VBUS: return "VBUS";
         default: return "none";
     }
+}
+
+const char *ztm_pwm_fan_output_mode_name(ztm_pwm_fan_output_mode_t mode)
+{
+    switch (mode) {
+        case ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN: return "open-drain";
+        case ZTM_PWM_FAN_OUTPUT_PUSH_PULL: return "push-pull";
+        default: return "unknown";
+    }
+}
+
+static bool fan_set_output_mode_hw(pwm_t *device,
+                                   uint8_t fan_1based,
+                                   ztm_pwm_fan_output_mode_t mode)
+{
+    if (!device || !valid_fan(fan_1based) ||
+        (mode != ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN &&
+         mode != ZTM_PWM_FAN_OUTPUT_PUSH_PULL)) {
+        return false;
+    }
+
+    fan_route_t route = g_fan_route[fan_1based - 1u];
+    emc2303_pwm_output_type_t type = mode == ZTM_PWM_FAN_OUTPUT_PUSH_PULL
+                                         ? EMC2303_PWM_OUTPUT_PUSH_PULL
+                                         : EMC2303_PWM_OUTPUT_OPEN_DRAIN;
+    return emc2303_fan_set_pwm_output_type(&device->fan_controller[route.emc_index],
+                                            route.emc_fan,
+                                            type) == EMC2303_OK;
 }
 
 static uint8_t pac_channels_from_product_id(uint8_t product_id)
@@ -334,11 +366,22 @@ int ztm_pwm_init(void *ctx, void *i2c, int8_t addr, int8_t en_pin)
         }
     }
 
+    device->last_init_stage = ZTM_PWM_INIT_FAN_OUTPUT_CONFIG;
+    for (uint8_t fan = 1u; fan <= ZTM_PWM_FAN_COUNT; fan++) {
+        ztm_pwm_fan_output_mode_t mode =
+            (ZTM_PWM_FAN_DEFAULT_PUSH_PULL_MASK & (1u << (fan - 1u))) != 0u
+                ? ZTM_PWM_FAN_OUTPUT_PUSH_PULL
+                : ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN;
+        if (!fan_set_output_mode_hw(device, fan, mode)) {
+            return pwm_init_failed(device, ZTM_PWM_INIT_FAN_OUTPUT_CONFIG, -33);
+        }
+    }
+
     device->last_init_stage = ZTM_PWM_INIT_FAN_INTERRUPTS;
     /* Enable ALERT reporting for all implemented fan channels. */
     if (emc2303_reg_write8(&device->fan_controller[0], EMC2303_REG_FAN_INT_ENABLE, 0x07u) != EMC2303_OK ||
         emc2303_reg_write8(&device->fan_controller[1], EMC2303_REG_FAN_INT_ENABLE, 0x07u) != EMC2303_OK) {
-        return pwm_init_failed(device, ZTM_PWM_INIT_FAN_INTERRUPTS, -33);
+        return pwm_init_failed(device, ZTM_PWM_INIT_FAN_INTERRUPTS, -34);
     }
 
     device->last_init_stage = ZTM_PWM_INIT_CLEAR_STATUS;
@@ -851,6 +894,48 @@ bool ztm_pwm_fan_set_all(uint8_t duty_pct)
     return ok;
 }
 
+bool ztm_pwm_fan_set_output_mode(uint8_t fan_1based, ztm_pwm_fan_output_mode_t mode)
+{
+    pwm_t *device = &ztm_pwm_1;
+    return device->ready && fan_set_output_mode_hw(device, fan_1based, mode);
+}
+
+bool ztm_pwm_fan_set_output_mode_all(ztm_pwm_fan_output_mode_t mode)
+{
+    if (!ztm_pwm_1.ready ||
+        (mode != ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN &&
+         mode != ZTM_PWM_FAN_OUTPUT_PUSH_PULL)) {
+        return false;
+    }
+
+    bool ok = true;
+    for (uint8_t fan = 1u; fan <= ZTM_PWM_FAN_COUNT; fan++) {
+        ok = fan_set_output_mode_hw(&ztm_pwm_1, fan, mode) && ok;
+    }
+    return ok;
+}
+
+bool ztm_pwm_fan_get_output_mode(uint8_t fan_1based, ztm_pwm_fan_output_mode_t *mode)
+{
+    pwm_t *device = &ztm_pwm_1;
+    if (!device->ready || !valid_fan(fan_1based) || !mode) {
+        return false;
+    }
+
+    fan_route_t route = g_fan_route[fan_1based - 1u];
+    emc2303_pwm_output_type_t type = EMC2303_PWM_OUTPUT_OPEN_DRAIN;
+    if (emc2303_fan_get_pwm_output_type(&device->fan_controller[route.emc_index],
+                                         route.emc_fan,
+                                         &type) != EMC2303_OK) {
+        return false;
+    }
+
+    *mode = type == EMC2303_PWM_OUTPUT_PUSH_PULL
+                ? ZTM_PWM_FAN_OUTPUT_PUSH_PULL
+                : ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN;
+    return true;
+}
+
 bool ztm_pwm_fan_stop(uint8_t fan_1based)
 {
     return ztm_pwm_fan_set(fan_1based, 0u);
@@ -863,27 +948,45 @@ bool ztm_pwm_fan_stop_all(void)
 
 bool ztm_pwm_fan_get_rpm(uint8_t fan_1based, uint32_t *rpm)
 {
-    pwm_t *device = &ztm_pwm_1;
-    if (!device->ready || !valid_fan(fan_1based) || !rpm) {
-        return false;
-    }
-
-    fan_route_t route = g_fan_route[fan_1based - 1u];
-    return emc2303_fan_get_rpm(&device->fan_controller[route.emc_index],
-                               route.emc_fan,
-                               rpm) == EMC2303_OK;
+    uint16_t tach_count = 0u;
+    return ztm_pwm_fan_get_tach_status(fan_1based, &tach_count, rpm) !=
+           ZTM_PWM_FAN_TACH_READ_ERROR;
 }
 
 bool ztm_pwm_fan_get_tach(uint8_t fan_1based, uint16_t *tach_count, uint32_t *rpm)
 {
+    return ztm_pwm_fan_get_tach_status(fan_1based, tach_count, rpm) !=
+           ZTM_PWM_FAN_TACH_READ_ERROR;
+}
+
+ztm_pwm_fan_tach_status_t ztm_pwm_fan_get_tach_status(uint8_t fan_1based,
+                                                       uint16_t *tach_count,
+                                                       uint32_t *rpm)
+{
     pwm_t *device = &ztm_pwm_1;
     if (!device->ready || !valid_fan(fan_1based) || !tach_count || !rpm) {
-        return false;
+        return ZTM_PWM_FAN_TACH_READ_ERROR;
     }
+
     fan_route_t route = g_fan_route[fan_1based - 1u];
     emc2303_t *controller = &device->fan_controller[route.emc_index];
-    return emc2303_fan_get_tach_counts(controller, route.emc_fan, tach_count) == EMC2303_OK &&
-           emc2303_fan_get_rpm(controller, route.emc_fan, rpm) == EMC2303_OK;
+    if (emc2303_fan_get_tach_counts(controller, route.emc_fan, tach_count) != EMC2303_OK) {
+        return ZTM_PWM_FAN_TACH_READ_ERROR;
+    }
+
+    if (*tach_count == EMC2303_TACH_COUNT_STALL) {
+        *rpm = 0u;
+        return ZTM_PWM_FAN_TACH_STALL;
+    }
+
+    if (emc2303_fan_tach_counts_to_rpm(controller,
+                                         route.emc_fan,
+                                         *tach_count,
+                                         rpm) != EMC2303_OK) {
+        return ZTM_PWM_FAN_TACH_READ_ERROR;
+    }
+
+    return ZTM_PWM_FAN_TACH_OK;
 }
 
 uint8_t ztm_pwm_fan_get_duty(uint8_t fan_1based)
@@ -1024,12 +1127,15 @@ static void log_emc_status(uint8_t controller_index,
         log_printf("ERROR: PWM fan controller %u Watchdog\n", (unsigned)(controller_index + 1u));
     }
 
+    /* A missing, disconnected or deliberately unmonitored TACH input can
+     * hold the EMC2303 stall condition active indefinitely. Do not spam the
+     * serial monitor from the periodic IRQ scan. Explicit CLI status commands
+     * still report the stall bit and saturated 0x1FFF count. */
+    (void)stall;
+
     for (uint8_t local = 1u; local <= 3u; local++) {
         uint8_t bit = EMC2303_FAN_BIT(local);
         uint8_t fan = (uint8_t)(fan_base + local);
-        if ((stall & bit) != 0u) {
-            log_printf("ERROR: PWM Fan %u Stall!\n", (unsigned)fan);
-        }
         if ((spin & bit) != 0u) {
             log_printf("ERROR: PWM Fan %u Spin-up Failure\n", (unsigned)fan);
         }

@@ -25,10 +25,13 @@ one single conversion and disables it afterward.
 - AIN input buffers enabled.
 - VBIAS enabled on AIN1, AIN3, and AIN5 so each floating thermocouple pair has a
   defined common-mode voltage.
-- Thermocouple type is deliberately not assumed. The API and console report raw
-  differential millivolts together with the measured cold-junction temperature.
-  Type-specific linearisation and compensation can be added when the fitted
-  thermocouple type is known.
+- Each thermocouple channel has a runtime-configurable standard probe type.
+- Type K is the power-on default for TC1..TC3. Types B, E, J, K, N, R, S, and T
+  are supported using the NIST reference functions.
+- The measured differential voltage is cold-junction compensated using the PCB
+  Pt1000, then converted to degrees C.
+- Exact ADC rail codes `0x000000` and `0xFFFFFF` are reported as disconnected
+  for thermocouple, CJC, and external RTD channels.
 
 ## RTD setup
 
@@ -101,6 +104,7 @@ adc info
 adc cjc
 adc rtd <1..8|all>
 adc tc <1..3|all>
+adc tc-type <1..3|all> [B|E|J|K|N|R|S|T]
 adc read-all
 adc verify
 adc errors
@@ -126,6 +130,7 @@ adc rtd 1
 adc rtd 8
 adc rtd all
 
+adc tc-type all
 adc tc 1
 adc tc all
 adc read-all
@@ -177,3 +182,25 @@ For the configured sinc4 filter, FS=200, and mid-power mode, the data-sheet
 settling-time calculation is about 167 ms. If hardware reports a materially
 longer time, the new diagnostics distinguish a slow conversion from a mode
 write/readback or cleanup problem.
+
+## Firmware 0.2.16 thermocouple conversion
+
+TC1..TC3 default to Type K. The setting is runtime-only and can be queried or
+changed independently:
+
+```text
+adc tc-type all
+adc tc-type 1 K
+adc tc-type 2 T
+adc tc-type 3 J
+```
+
+The conversion follows the standard cold-junction compensation sequence: the
+configured type's equivalent voltage at the CJC temperature is added to the
+measured differential voltage, then the combined 0 C-referenced voltage is
+converted back to temperature. `adc tc` and `adc read-all` retain the raw
+differential voltage and CJC value in their output for diagnostics.
+
+ADC endpoint codes `0x000000` and `0xFFFFFF` are classified as `DISCONNECTED`
+instead of being converted into full-scale temperatures. A disconnected input
+does not abort `adc read-all`; the scan continues through the remaining inputs.

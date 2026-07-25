@@ -23,6 +23,11 @@
 #define ZTM_PWM_EMC2_ADDR         0x2Fu
 #define ZTM_PWM_SHUNT_UOHM        50000u
 
+/* Logical Fan1..6 bit mask. The current board defaults all PWM pins to push-pull. */
+#ifndef ZTM_PWM_FAN_DEFAULT_PUSH_PULL_MASK
+#define ZTM_PWM_FAN_DEFAULT_PUSH_PULL_MASK 0x3Fu
+#endif
+
 typedef enum {
     ZTM_PWM_PAC_TOPOLOGY_NONE = 0,
     ZTM_PWM_PAC_TOPOLOGY_NATIVE_4CH,
@@ -61,6 +66,7 @@ typedef enum {
     ZTM_PWM_INIT_EMC1,
     ZTM_PWM_INIT_EMC2,
     ZTM_PWM_INIT_FAN_SAFE_STATE,
+    ZTM_PWM_INIT_FAN_OUTPUT_CONFIG,
     ZTM_PWM_INIT_FAN_INTERRUPTS,
     ZTM_PWM_INIT_CLEAR_STATUS,
     ZTM_PWM_INIT_READY,
@@ -101,6 +107,17 @@ typedef struct {
     bool address_present[128];
     uint8_t devices_found;
 } ztm_pwm_i2c_scan_result_t;
+
+typedef enum {
+    ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN = 0,
+    ZTM_PWM_FAN_OUTPUT_PUSH_PULL,
+} ztm_pwm_fan_output_mode_t;
+
+typedef enum {
+    ZTM_PWM_FAN_TACH_OK = 0,
+    ZTM_PWM_FAN_TACH_STALL,
+    ZTM_PWM_FAN_TACH_READ_ERROR,
+} ztm_pwm_fan_tach_status_t;
 
 typedef enum {
     ZTM_PWM_GPIO_INPUT = 0,
@@ -181,10 +198,17 @@ bool ztm_pwm_fan_set_raw(uint8_t fan_1based, uint8_t raw);
 bool ztm_pwm_fan_set_target_rpm(uint8_t fan_1based, uint32_t rpm);
 bool ztm_pwm_fan_set_open_loop(uint8_t fan_1based, uint8_t duty_pct);
 bool ztm_pwm_fan_set_all(uint8_t duty_pct);
+bool ztm_pwm_fan_set_output_mode(uint8_t fan_1based, ztm_pwm_fan_output_mode_t mode);
+bool ztm_pwm_fan_set_output_mode_all(ztm_pwm_fan_output_mode_t mode);
+bool ztm_pwm_fan_get_output_mode(uint8_t fan_1based, ztm_pwm_fan_output_mode_t *mode);
+const char *ztm_pwm_fan_output_mode_name(ztm_pwm_fan_output_mode_t mode);
 bool ztm_pwm_fan_stop(uint8_t fan_1based);
 bool ztm_pwm_fan_stop_all(void);
 bool ztm_pwm_fan_get_rpm(uint8_t fan_1based, uint32_t *rpm);
 bool ztm_pwm_fan_get_tach(uint8_t fan_1based, uint16_t *tach_count, uint32_t *rpm);
+ztm_pwm_fan_tach_status_t ztm_pwm_fan_get_tach_status(uint8_t fan_1based,
+                                                       uint16_t *tach_count,
+                                                       uint32_t *rpm);
 bool ztm_pwm_fan_get_route(uint8_t fan_1based, uint8_t *emc_1based, uint8_t *local_fan_1based);
 uint8_t ztm_pwm_fan_get_duty(uint8_t fan_1based);
 

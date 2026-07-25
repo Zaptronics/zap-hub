@@ -55,13 +55,38 @@ stepper reset <1..4|all>
 stepper hiz [1..4|all]
 stepper stop [1..4|all]
 stepper config <1..4|all>
+stepper config <1..4|all> <hold> <run> <acc> <dec>
+stepper config <1..4|all> defaults
+stepper microstep <1..4|all>
+stepper microstep <1..4|all> <full|1/2|1/4|1/8|1/16|1/32|1/64|1/128>
+stepper microstep <1..4|all> defaults
 stepper run <1..3|all> <fwd|rev> <steps/s>
 stepper move <1..3> <fwd|rev> <steps>
 ```
 
 The console limits `run` to 0–5000 steps/s and `move` to the L6470 22-bit step range.
 
-`stepper config` applies the hardware-tested values, with the ACC and DEC register widths set to two bytes:
+`stepper config <selector>` reads the four KVAL registers. Supplying four values writes KVAL_HOLD, KVAL_RUN, KVAL_ACC, and KVAL_DEC respectively. Values may be decimal or `0x`-prefixed hexadecimal and must be 0..255. For example:
+
+```text
+stepper config 1
+stepper config 1 0 10 10 10
+stepper config all 0 25 40 40
+stepper config all defaults
+```
+
+`stepper microstep <selector>` reads the STEP_SEL field from the L6470 STEP_MODE register. Supplying a mode changes one motor or all motors. Aliases `off`, `1`, `2`, `4`, `8`, `16`, `32`, `64`, and `128` are accepted. For example:
+
+```text
+stepper microstep all
+stepper microstep 1 1/16
+stepper microstep all 1/128
+stepper microstep all defaults
+```
+
+Changing step mode first places the selected driver in hard HiZ because the L6470 only accepts STEP_MODE changes while its bridges are disabled. The command also resets ABS_POS to zero because changing STEP_SEL resets the electrical microstep position and makes the previous absolute-position count invalid. The selected mode is retained across `stepper reset`; a firmware restart or `defaults` restores full-step. `stepper move` counts are expressed in the selected step unit, so at 1/128 mode a move of 128 advances one full motor step.
+
+The compiled hardware-tested defaults are:
 
 | Register | Value |
 |---|---:|
@@ -74,7 +99,7 @@ The console limits `run` to 0–5000 steps/s and `move` to the L6470 22-bit step
 | KVAL_ACC | `0x28` (decimal 40) |
 | KVAL_DEC | `0x28` (decimal 40) |
 
-These values are now applied automatically to all four L6470s at startup. Motor 4 is then placed in hard HiZ and operational `run`, `move`, and `run all` commands exclude it. Reset commands automatically restore this configuration and return motor 4 to hard HiZ.
+Runtime KVAL and microstep tuning are retained across `stepper reset` commands. A firmware restart restores the compiled defaults. `stepper config <selector> defaults` restores the full verified configuration, including full-step mode, immediately. Motor 4 is always returned to hard HiZ and operational `run`, `move`, and `run all` commands exclude it.
 
 ## Suggested first hardware sequence
 

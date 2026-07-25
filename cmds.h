@@ -282,32 +282,227 @@ static int cmd_stepper_stop(int argc, char **argv, char *out, size_t out_len)
     return ok ? 0 : -2;
 }
 
+static bool cmd_stepper_print_kval_config(uint8_t id)
+{
+    ztm_stepper_kval_config_t config;
+    if (!ztm_stepper_get_kval_config(id, &config)) {
+        console_printf("  motor %u: READ FAILED\r\n", id);
+        return false;
+    }
+
+    console_printf("  motor %u: HOLD=%u RUN=%u ACC=%u DEC=%u\r\n",
+                   id,
+                   config.hold,
+                   config.run,
+                   config.acc,
+                   config.dec);
+    return true;
+}
+
 static int cmd_stepper_config(int argc, char **argv, char *out, size_t out_len)
 {
     (void)out;
     (void)out_len;
 
     if (argc < 3) {
-        console_printf("\r\nUsage: stepper config <1..4|all>\r\n");
+        console_printf("\r\nUsage:\r\n");
+        console_printf("  stepper config <1..4|all>\r\n");
+        console_printf("  stepper config <1..4|all> <hold> <run> <acc> <dec>\r\n");
+        console_printf("  stepper config <1..4|all> defaults\r\n");
         return -1;
     }
 
-    bool ok;
-    if (selector_is_all(argv[2])) {
-        ok = ztm_stepper_apply_test_config_all();
-    } else {
-        uint8_t id;
-        if (!parse_stepper_id(argv[2], &id)) {
-            console_printf("\r\nInvalid motor selector. Use 1..4 or all.\r\n");
-            return -2;
-        }
-        ok = ztm_stepper_apply_test_config(id);
+    const bool all = selector_is_all(argv[2]);
+    uint8_t id = 0;
+    if (!all && !parse_stepper_id(argv[2], &id)) {
+        console_printf("\r\nInvalid motor selector. Use 1..4 or all.\r\n");
+        return -2;
     }
 
-    console_printf("\r\n%s\r\n",
-                   ok ? "Verified configuration applied: HOLD=0, RUN=25, ACC/DEC=40"
-                      : "Stepper configuration failed");
-    return ok ? 0 : -3;
+    if (argc == 3) {
+        console_printf("\r\nL6470 KVAL configuration:\r\n");
+        bool ok = true;
+        if (all) {
+            for (uint8_t motor = 1; motor <= ZTM_STEPPER_DRIVER_COUNT; motor++) {
+                ok = cmd_stepper_print_kval_config(motor) && ok;
+            }
+        } else {
+            ok = cmd_stepper_print_kval_config(id);
+        }
+        return ok ? 0 : -3;
+    }
+
+    bool ok = false;
+    if (argc == 4 &&
+        (strcmp(argv[3], "default") == 0 || strcmp(argv[3], "defaults") == 0)) {
+        ok = all ? ztm_stepper_apply_test_config_all()
+                 : ztm_stepper_apply_test_config(id);
+        if (ok) {
+            console_printf("\r\nCompiled defaults restored: HOLD=%u RUN=%u ACC=%u DEC=%u\r\n",
+                           ZTM_STEPPER_DEFAULT_KVAL_HOLD,
+                           ZTM_STEPPER_DEFAULT_KVAL_RUN,
+                           ZTM_STEPPER_DEFAULT_KVAL_ACC,
+                           ZTM_STEPPER_DEFAULT_KVAL_DEC);
+        }
+    } else if (argc == 7) {
+        uint32_t hold;
+        uint32_t run;
+        uint32_t acc;
+        uint32_t dec;
+        if (!parse_u32(argv[3], &hold) || hold > UINT8_MAX ||
+            !parse_u32(argv[4], &run) || run > UINT8_MAX ||
+            !parse_u32(argv[5], &acc) || acc > UINT8_MAX ||
+            !parse_u32(argv[6], &dec) || dec > UINT8_MAX) {
+            console_printf("\r\nKVAL values must each be 0..255; decimal or hex is accepted.\r\n");
+            return -4;
+        }
+
+        const ztm_stepper_kval_config_t config = {
+            .hold = (uint8_t)hold,
+            .run = (uint8_t)run,
+            .acc = (uint8_t)acc,
+            .dec = (uint8_t)dec,
+        };
+        ok = all ? ztm_stepper_set_kval_config_all(&config)
+                 : ztm_stepper_set_kval_config(id, &config);
+        if (ok) {
+            console_printf("\r\nKVAL configuration applied: HOLD=%u RUN=%u ACC=%u DEC=%u\r\n",
+                           config.hold,
+                           config.run,
+                           config.acc,
+                           config.dec);
+            console_printf("Retained across 'stepper reset'; a firmware restart restores compiled defaults.\r\n");
+        }
+    } else {
+        console_printf("\r\nUsage:\r\n");
+        console_printf("  stepper config <1..4|all>\r\n");
+        console_printf("  stepper config <1..4|all> <hold> <run> <acc> <dec>\r\n");
+        console_printf("  stepper config <1..4|all> defaults\r\n");
+        return -5;
+    }
+
+    if (!ok) {
+        console_printf("\r\nStepper configuration failed.\r\n");
+        return -6;
+    }
+    return 0;
+}
+
+static const char *stepper_microstep_name(ztm_stepper_microstep_t mode)
+{
+    switch (mode) {
+        case ZTM_STEPPER_MICROSTEP_FULL:            return "full";
+        case ZTM_STEPPER_MICROSTEP_HALF:            return "1/2";
+        case ZTM_STEPPER_MICROSTEP_QUARTER:         return "1/4";
+        case ZTM_STEPPER_MICROSTEP_EIGHTH:          return "1/8";
+        case ZTM_STEPPER_MICROSTEP_SIXTEENTH:       return "1/16";
+        case ZTM_STEPPER_MICROSTEP_THIRTY_SECOND:   return "1/32";
+        case ZTM_STEPPER_MICROSTEP_SIXTY_FOURTH:    return "1/64";
+        case ZTM_STEPPER_MICROSTEP_ONE_TWENTY_EIGHTH: return "1/128";
+        default:                                    return "invalid";
+    }
+}
+
+static bool parse_stepper_microstep(const char *text,
+                                    ztm_stepper_microstep_t *mode)
+{
+    if (!text || !mode) {
+        return false;
+    }
+
+    if (strcmp(text, "full") == 0 || strcmp(text, "off") == 0 ||
+        strcmp(text, "1") == 0 || strcmp(text, "1/1") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_FULL;
+    } else if (strcmp(text, "half") == 0 || strcmp(text, "2") == 0 ||
+               strcmp(text, "1/2") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_HALF;
+    } else if (strcmp(text, "quarter") == 0 || strcmp(text, "4") == 0 ||
+               strcmp(text, "1/4") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_QUARTER;
+    } else if (strcmp(text, "8") == 0 || strcmp(text, "1/8") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_EIGHTH;
+    } else if (strcmp(text, "16") == 0 || strcmp(text, "1/16") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_SIXTEENTH;
+    } else if (strcmp(text, "32") == 0 || strcmp(text, "1/32") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_THIRTY_SECOND;
+    } else if (strcmp(text, "64") == 0 || strcmp(text, "1/64") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_SIXTY_FOURTH;
+    } else if (strcmp(text, "128") == 0 || strcmp(text, "1/128") == 0) {
+        *mode = ZTM_STEPPER_MICROSTEP_ONE_TWENTY_EIGHTH;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool cmd_stepper_print_microstep(uint8_t id)
+{
+    ztm_stepper_microstep_t mode;
+    if (!ztm_stepper_get_microstep(id, &mode)) {
+        console_printf("  motor %u: READ FAILED\r\n", id);
+        return false;
+    }
+
+    console_printf("  motor %u: %s (STEP_SEL=%u)\r\n",
+                   id,
+                   stepper_microstep_name(mode),
+                   (unsigned)mode);
+    return true;
+}
+
+static int cmd_stepper_microstep(int argc, char **argv, char *out, size_t out_len)
+{
+    (void)out;
+    (void)out_len;
+
+    if (argc < 3 || argc > 4) {
+        console_printf("\r\nUsage: stepper microstep <1..4|all> "
+                       "[full|1/2|1/4|1/8|1/16|1/32|1/64|1/128|defaults]\r\n");
+        return -1;
+    }
+
+    const bool all = selector_is_all(argv[2]);
+    uint8_t id = 0;
+    if (!all && !parse_stepper_id(argv[2], &id)) {
+        console_printf("\r\nInvalid motor selector. Use 1..4 or all.\r\n");
+        return -2;
+    }
+
+    if (argc == 3) {
+        console_printf("\r\nL6470 microstep configuration:\r\n");
+        bool ok = true;
+        if (all) {
+            for (uint8_t motor = 1; motor <= ZTM_STEPPER_DRIVER_COUNT; motor++) {
+                ok = cmd_stepper_print_microstep(motor) && ok;
+            }
+        } else {
+            ok = cmd_stepper_print_microstep(id);
+        }
+        return ok ? 0 : -3;
+    }
+
+    ztm_stepper_microstep_t mode;
+    if (strcmp(argv[3], "default") == 0 || strcmp(argv[3], "defaults") == 0) {
+        mode = ZTM_STEPPER_DEFAULT_MICROSTEP;
+    } else if (!parse_stepper_microstep(argv[3], &mode)) {
+        console_printf("\r\nMode must be full, 1/2, 1/4, 1/8, 1/16, "
+                       "1/32, 1/64, or 1/128.\r\n");
+        return -4;
+    }
+
+    const bool ok = all ? ztm_stepper_set_microstep_all(mode)
+                        : ztm_stepper_set_microstep(id, mode);
+    if (!ok) {
+        console_printf("\r\nMicrostep configuration failed.\r\n");
+        return -5;
+    }
+
+    console_printf("\r\nMicrostep mode set to %s. Selected motor(s) are now in hard HiZ; "
+                   "ABS_POS was reset to zero.\r\n",
+                   stepper_microstep_name(mode));
+    console_printf("Retained across 'stepper reset'; a firmware restart restores full-step.\r\n");
+    console_printf("MOVE counts use the selected step unit (full, half, quarter, etc.).\r\n");
+    return 0;
 }
 
 static int cmd_stepper_run(int argc, char **argv, char *out, size_t out_len)
@@ -821,6 +1016,24 @@ static bool parse_pwm_fan(const char *text, uint8_t *fan)
     return true;
 }
 
+static bool parse_pwm_fan_output_mode(const char *text, ztm_pwm_fan_output_mode_t *mode)
+{
+    if (!text || !mode) {
+        return false;
+    }
+    if (strcmp(text, "open-drain") == 0 || strcmp(text, "open") == 0 ||
+        strcmp(text, "od") == 0) {
+        *mode = ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN;
+        return true;
+    }
+    if (strcmp(text, "push-pull") == 0 || strcmp(text, "push") == 0 ||
+        strcmp(text, "pp") == 0) {
+        *mode = ZTM_PWM_FAN_OUTPUT_PUSH_PULL;
+        return true;
+    }
+    return false;
+}
+
 static bool parse_pwm_gpio(const char *text, uint8_t *gpio)
 {
     uint32_t value = 0;
@@ -923,6 +1136,16 @@ static int cmd_pwm_info(int argc, char **argv, char *out, size_t out_len)
             } else {
                 console_printf(" %u:%u%%", (unsigned)fan,
                                (unsigned)ztm_pwm_fan_get_duty(fan));
+            }
+        }
+        console_printf("\r\n  Fan output:");
+        for (uint8_t fan = 1u; fan <= ZTM_PWM_FAN_COUNT; fan++) {
+            ztm_pwm_fan_output_mode_t mode = ZTM_PWM_FAN_OUTPUT_OPEN_DRAIN;
+            if (ztm_pwm_fan_get_output_mode(fan, &mode)) {
+                console_printf(" %u:%s", (unsigned)fan,
+                               mode == ZTM_PWM_FAN_OUTPUT_PUSH_PULL ? "push-pull" : "open-drain");
+            } else {
+                console_printf(" %u:READ-ERROR", (unsigned)fan);
             }
         }
         console_printf("\r\n  GPIO state:");
@@ -1060,6 +1283,56 @@ static int cmd_pwm_fan_set(int argc, char **argv, char *out, size_t out_len)
     return 0;
 }
 
+static int cmd_pwm_fan_output(int argc, char **argv, char *out, size_t out_len)
+{
+    (void)out; (void)out_len;
+    if (argc != 3 && argc != 4) {
+        console_printf("\r\nUsage: pwm fan-output <1..6|all> [open-drain|push-pull]\r\n");
+        return -1;
+    }
+
+    uint8_t first = 1u;
+    uint8_t last = ZTM_PWM_FAN_COUNT;
+    if (!selector_is_all(argv[2])) {
+        if (!parse_pwm_fan(argv[2], &first)) {
+            console_printf("\r\nUsage: pwm fan-output <1..6|all> [open-drain|push-pull]\r\n");
+            return -2;
+        }
+        last = first;
+    }
+
+    if (argc == 4) {
+        ztm_pwm_fan_output_mode_t mode;
+        if (!parse_pwm_fan_output_mode(argv[3], &mode)) {
+            console_printf("\r\nOutput mode must be open-drain or push-pull.\r\n");
+            return -3;
+        }
+
+        bool ok = selector_is_all(argv[2])
+                      ? ztm_pwm_fan_set_output_mode_all(mode)
+                      : ztm_pwm_fan_set_output_mode(first, mode);
+        if (!ok) {
+            console_printf("\r\nFailed to set fan PWM output mode.\r\n");
+            return -4;
+        }
+    }
+
+    console_printf("\r\nFan PWM output modes:\r\n");
+    bool all_ok = true;
+    for (uint8_t fan = first; fan <= last; fan++) {
+        ztm_pwm_fan_output_mode_t mode;
+        if (ztm_pwm_fan_get_output_mode(fan, &mode)) {
+            console_printf("  Fan %u: %s\r\n", (unsigned)fan,
+                           ztm_pwm_fan_output_mode_name(mode));
+        } else {
+            console_printf("  Fan %u: READ ERROR\r\n", (unsigned)fan);
+            all_ok = false;
+        }
+    }
+    console_printf("  TACH inputs have no internal pull-up; external pull-ups are required.\r\n");
+    return all_ok ? 0 : -5;
+}
+
 static int cmd_pwm_fan_stop(int argc, char **argv, char *out, size_t out_len)
 {
     (void)out; (void)out_len;
@@ -1094,27 +1367,44 @@ static int cmd_pwm_rpm(int argc, char **argv, char *out, size_t out_len)
     }
 
     if (selector_is_all(argv[2])) {
+        bool all_ok = true;
         console_printf("\r\nFan tachometer readings:\r\n");
         for (uint8_t fan = 1u; fan <= ZTM_PWM_FAN_COUNT; fan++) {
+            uint16_t count = 0u;
             uint32_t rpm = 0;
-            if (!ztm_pwm_fan_get_rpm(fan, &rpm)) {
+            ztm_pwm_fan_tach_status_t status =
+                ztm_pwm_fan_get_tach_status(fan, &count, &rpm);
+            if (status == ZTM_PWM_FAN_TACH_READ_ERROR) {
                 console_printf("  Fan %u: READ ERROR\r\n", (unsigned)fan);
+                all_ok = false;
+            } else if (status == ZTM_PWM_FAN_TACH_STALL) {
+                console_printf("  Fan %u: STALL (no valid tach, count=0x%04X)\r\n",
+                               (unsigned)fan, (unsigned)count);
+                all_ok = false;
             } else {
                 console_printf("  Fan %u: %lu RPM\r\n", (unsigned)fan, (unsigned long)rpm);
             }
         }
-        return 0;
+        return all_ok ? 0 : -3;
     }
 
     uint8_t fan = 0;
+    uint16_t count = 0u;
     uint32_t rpm = 0;
     if (!parse_pwm_fan(argv[2], &fan)) {
         console_printf("\r\nUsage: pwm rpm <1..6|all>\r\n");
         return -2;
     }
-    if (!ztm_pwm_fan_get_rpm(fan, &rpm)) {
+    ztm_pwm_fan_tach_status_t status =
+        ztm_pwm_fan_get_tach_status(fan, &count, &rpm);
+    if (status == ZTM_PWM_FAN_TACH_READ_ERROR) {
         console_printf("\r\nFailed to read fan %u tachometer.\r\n", (unsigned)fan);
         return -3;
+    }
+    if (status == ZTM_PWM_FAN_TACH_STALL) {
+        console_printf("\r\nFan %u: STALL (no valid tach, count=0x%04X)\r\n",
+                       (unsigned)fan, (unsigned)count);
+        return -4;
     }
     console_printf("\r\nFan %u: %lu RPM\r\n", (unsigned)fan, (unsigned long)rpm);
     return 0;
@@ -1479,10 +1769,17 @@ static int cmd_pwm_tach(int argc, char **argv, char *out, size_t out_len)
         uint32_t rpm = 0;
         uint8_t emc = 0, local = 0;
         (void)ztm_pwm_fan_get_route(fan, &emc, &local);
-        if (ztm_pwm_fan_get_tach(fan, &count, &rpm)) {
+        ztm_pwm_fan_tach_status_t status =
+            ztm_pwm_fan_get_tach_status(fan, &count, &rpm);
+        if (status == ZTM_PWM_FAN_TACH_OK) {
             console_printf("  Fan %u EMC%u/FAN%u: count=%u (0x%04X), %lu RPM\r\n",
                            (unsigned)fan, (unsigned)emc, (unsigned)local,
                            (unsigned)count, (unsigned)count, (unsigned long)rpm);
+        } else if (status == ZTM_PWM_FAN_TACH_STALL) {
+            console_printf("  Fan %u EMC%u/FAN%u: count=%u (0x%04X), STALL\r\n",
+                           (unsigned)fan, (unsigned)emc, (unsigned)local,
+                           (unsigned)count, (unsigned)count);
+            all_ok = false;
         } else {
             console_printf("  Fan %u: READ ERROR\r\n", (unsigned)fan);
             all_ok = false;
@@ -2321,12 +2618,30 @@ static int cmd_hv_reinit(int argc, char **argv, char *out, size_t out_len)
 static void print_adc_rtd_sample(const char *name,
                                  const ztm_adc_rtd_sample_t *sample)
 {
+    const char *label = name ? name : "RTD";
     if (!sample || !sample->valid) {
-        console_printf("  %-5s READ ERROR\r\n", name ? name : "RTD");
+        console_printf("  %-5s READ ERROR\r\n", label);
+        return;
+    }
+    if (sample->status == ZTM_ADC_SENSOR_DISCONNECTED) {
+        console_printf("  %-5s CH%u AIN%u raw=0x%06lX DISCONNECTED\r\n",
+                       label,
+                       (unsigned)sample->ad7124_channel,
+                       (unsigned)sample->ain_positive,
+                       (unsigned long)sample->raw_code);
+        return;
+    }
+    if (sample->status == ZTM_ADC_SENSOR_OUT_OF_RANGE) {
+        console_printf("  %-5s CH%u AIN%u raw=0x%06lX R=%.3f ohm OUT OF RANGE\r\n",
+                       label,
+                       (unsigned)sample->ad7124_channel,
+                       (unsigned)sample->ain_positive,
+                       (unsigned long)sample->raw_code,
+                       sample->resistance_ohms);
         return;
     }
     console_printf("  %-5s CH%u AIN%u raw=0x%06lX R=%.3f ohm T=%.3f C\r\n",
-                   name ? name : "RTD",
+                   label,
                    (unsigned)sample->ad7124_channel,
                    (unsigned)sample->ain_positive,
                    (unsigned long)sample->raw_code,
@@ -2340,24 +2655,50 @@ static void print_adc_tc_sample(const ztm_adc_tc_sample_t *sample)
         console_printf("  TC?   READ ERROR\r\n");
         return;
     }
-    if (sample->cold_junction_valid) {
-        console_printf("  TC%u   CH%u AIN%u/AIN%u raw=0x%06lX dV=%+.6f mV, CJC=%.3f C\r\n",
-                       (unsigned)sample->logical_index,
+
+    const char *type = thermocouple_type_name(sample->type);
+    if (sample->status == ZTM_ADC_SENSOR_DISCONNECTED) {
+        console_printf("  TC%u   Type %s CH%u AIN%u/AIN%u raw=0x%06lX DISCONNECTED\r\n",
+                       (unsigned)sample->logical_index, type,
+                       (unsigned)sample->ad7124_channel,
+                       (unsigned)sample->ain_positive,
+                       (unsigned)sample->ain_negative,
+                       (unsigned long)sample->raw_code);
+        return;
+    }
+    if (sample->status == ZTM_ADC_SENSOR_CJC_UNAVAILABLE) {
+        console_printf("  TC%u   Type %s CH%u AIN%u/AIN%u raw=0x%06lX dV=%+.6f mV, CJC unavailable\r\n",
+                       (unsigned)sample->logical_index, type,
+                       (unsigned)sample->ad7124_channel,
+                       (unsigned)sample->ain_positive,
+                       (unsigned)sample->ain_negative,
+                       (unsigned long)sample->raw_code,
+                       sample->differential_mv);
+        return;
+    }
+    if (sample->status == ZTM_ADC_SENSOR_OUT_OF_RANGE) {
+        console_printf("  TC%u   Type %s CH%u AIN%u/AIN%u raw=0x%06lX dV=%+.6f mV, CJC=%.3f C, OUT OF RANGE\r\n",
+                       (unsigned)sample->logical_index, type,
                        (unsigned)sample->ad7124_channel,
                        (unsigned)sample->ain_positive,
                        (unsigned)sample->ain_negative,
                        (unsigned long)sample->raw_code,
                        sample->differential_mv,
                        sample->cold_junction_c);
-    } else {
-        console_printf("  TC%u   CH%u AIN%u/AIN%u raw=0x%06lX dV=%+.6f mV, CJC unavailable\r\n",
-                       (unsigned)sample->logical_index,
-                       (unsigned)sample->ad7124_channel,
-                       (unsigned)sample->ain_positive,
-                       (unsigned)sample->ain_negative,
-                       (unsigned long)sample->raw_code,
-                       sample->differential_mv);
+        return;
     }
+
+    console_printf("  TC%u   Type %s CH%u AIN%u/AIN%u raw=0x%06lX dV=%+.6f mV, "
+                   "CJC=%.3f C, E0=%+.6f mV, T=%.3f C\r\n",
+                   (unsigned)sample->logical_index, type,
+                   (unsigned)sample->ad7124_channel,
+                   (unsigned)sample->ain_positive,
+                   (unsigned)sample->ain_negative,
+                   (unsigned long)sample->raw_code,
+                   sample->differential_mv,
+                   sample->cold_junction_c,
+                   sample->compensated_mv,
+                   sample->temperature_c);
 }
 
 static const char *adc_measure_stage_name(ztm_adc_measure_stage_t stage)
@@ -2442,7 +2783,10 @@ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
     console_printf("  RTD: REFIN1 ratiometric, Rref=%.1f ohm, IOUT0=500 uA, one sensor at a time\r\n",
                    module->reference_resistor_ohms);
     console_printf("  At a 1 kohm Pt1000: expect RTD_R/REFIN1+=~1.0 V and sensor AIN+=~1.5 V\r\n");
-    console_printf("  TC type is not configured: commands report raw mV plus CJC temperature\r\n");
+    console_printf("  TC types: TC1=%s TC2=%s TC3=%s; default Type K; runtime configurable\r\n",
+                   thermocouple_type_name(module->thermocouple_types[0]),
+                   thermocouple_type_name(module->thermocouple_types[1]),
+                   thermocouple_type_name(module->thermocouple_types[2]));
     console_printf("  Configuration: %s; verify failures=%lu\r\n",
                    module->configuration_verified ? "VERIFIED" : "NOT VERIFIED",
                    (unsigned long)module->configuration_error_count);
@@ -2540,6 +2884,77 @@ static int cmd_adc_rtd(int argc, char **argv, char *out, size_t out_len)
     return 0;
 }
 
+static void print_adc_tc_types(void)
+{
+    for (uint8_t tc = 1u; tc <= ZTM_ADC_TC_COUNT; tc++) {
+        thermocouple_type_t type;
+        if (ztm_adc_get_thermocouple_type(tc, &type)) {
+            console_printf("  TC%u: Type %s\r\n",
+                           (unsigned)tc, thermocouple_type_name(type));
+        } else {
+            console_printf("  TC%u: unavailable\r\n", (unsigned)tc);
+        }
+    }
+}
+
+static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
+{
+    (void)out; (void)out_len;
+    if (argc != 3 && argc != 4) {
+        console_printf("\r\nUsage: adc tc-type <1..3|all> [B|E|J|K|N|R|S|T]\r\n");
+        return -1;
+    }
+
+    bool all = selector_is_all(argv[2]);
+    uint32_t id = 0u;
+    if (!all && (!parse_u32(argv[2], &id) || id < 1u || id > ZTM_ADC_TC_COUNT)) {
+        console_printf("\r\nUsage: adc tc-type <1..3|all> [B|E|J|K|N|R|S|T]\r\n");
+        return -2;
+    }
+
+    if (argc == 3) {
+        console_printf("\r\nThermocouple channel types:\r\n");
+        if (all) {
+            print_adc_tc_types();
+        } else {
+            thermocouple_type_t type;
+            if (!ztm_adc_get_thermocouple_type((uint8_t)id, &type)) {
+                console_printf("  TC%lu type unavailable.\r\n", (unsigned long)id);
+                return -3;
+            }
+            console_printf("  TC%lu: Type %s\r\n",
+                           (unsigned long)id, thermocouple_type_name(type));
+        }
+        return 0;
+    }
+
+    thermocouple_type_t type;
+    if (!thermocouple_type_parse(argv[3], &type)) {
+        console_printf("\r\nUnknown thermocouple type '%s'. Use B, E, J, K, N, R, S, or T.\r\n",
+                       argv[3]);
+        return -4;
+    }
+
+    if (all) {
+        for (uint8_t tc = 1u; tc <= ZTM_ADC_TC_COUNT; tc++) {
+            if (!ztm_adc_set_thermocouple_type(tc, type)) {
+                console_printf("\r\nFailed to set TC%u type.\r\n", (unsigned)tc);
+                return -5;
+            }
+        }
+        console_printf("\r\nTC1..3 set to Type %s (runtime setting).\r\n",
+                       thermocouple_type_name(type));
+    } else {
+        if (!ztm_adc_set_thermocouple_type((uint8_t)id, type)) {
+            console_printf("\r\nFailed to set TC%lu type.\r\n", (unsigned long)id);
+            return -6;
+        }
+        console_printf("\r\nTC%lu set to Type %s (runtime setting).\r\n",
+                       (unsigned long)id, thermocouple_type_name(type));
+    }
+    return 0;
+}
+
 static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
 {
     (void)out; (void)out_len;
@@ -2555,7 +2970,7 @@ static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
             print_adc_last_measurement();
             return -2;
         }
-        console_printf("\r\nThermocouple differential readings (type not configured):\r\n");
+        console_printf("\r\nCold-junction compensated thermocouple readings:\r\n");
         for (uint8_t i = 0u; i < ZTM_ADC_TC_COUNT; i++) {
             print_adc_tc_sample(&samples[i]);
         }
@@ -2574,7 +2989,7 @@ static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
         print_adc_last_measurement();
         return -4;
     }
-    console_printf("\r\nThermocouple differential reading (type not configured):\r\n");
+    console_printf("\r\nCold-junction compensated thermocouple reading:\r\n");
     print_adc_tc_sample(&sample);
     return 0;
 }
@@ -2780,7 +3195,8 @@ static const cli_cmd_t adc_cmds[] = {
     { "info",      "show AD7124 identity, topology, assumptions, and register summary", cmd_adc_info },
     { "cjc",       "read the PCB cold-junction Pt1000 on AIN6", cmd_adc_cjc },
     { "rtd",       "adc rtd <1..8|all> - excite one Pt1000 at a time and convert to C", cmd_adc_rtd },
-    { "tc",        "adc tc <1..3|all> - raw differential mV plus cold-junction C", cmd_adc_tc },
+    { "tc",        "adc tc <1..3|all> - compensated thermocouple temperature in C", cmd_adc_tc },
+    { "tc-type",   "adc tc-type <1..3|all> [B|E|J|K|N|R|S|T] - query/set probe type", cmd_adc_tc_type },
     { "read-all",  "read CJC, eight external RTDs, and three thermocouples", cmd_adc_read_all },
     { "verify",    "read back and verify all ADC, setup, filter, channel, bias, and IOUT registers", cmd_adc_verify },
     { "errors",    "read raw STATUS and ERROR diagnostic registers", cmd_adc_errors },
@@ -2801,7 +3217,8 @@ static const cli_cmd_t stepper_cmds[] = {
     { "reset",  "stepper reset <1..4|all> - reset, restore verified config, keep 4 HiZ", cmd_stepper_reset },
     { "hiz",    "stepper hiz [1..4|all] - immediate hard HiZ", cmd_stepper_hiz },
     { "stop",   "stepper stop [1..4|all] - all stops 1..3 and keeps 4 HiZ", cmd_stepper_stop },
-    { "config", "stepper config <1..4|all> - HOLD=0, RUN=25, ACC/DEC=40", cmd_stepper_config },
+    { "config", "stepper config <1..4|all> [hold run acc dec|defaults] - query/set KVALs", cmd_stepper_config },
+    { "microstep", "stepper microstep <1..4|all> [mode|defaults] - full through 1/128", cmd_stepper_microstep },
     { "run",    "stepper run <1..3|all> <fwd|rev> <steps/s>; all excludes motor 4", cmd_stepper_run },
     { "move",   "stepper move <1..3> <fwd|rev> <steps>", cmd_stepper_move },
     { "get",    "stepper get <1..4> <register> <bytes>", cmd_stepper_get },
@@ -2843,6 +3260,7 @@ static const cli_cmd_t pwm_cmds[] = {
     { "current",     "pwm current <1..12|all> - averaged current through 50mOhm shunts", cmd_pwm_current },
     { "measure",     "pwm measure <1..12|all> [avg|instant] - source, raw shunt voltage, current", cmd_pwm_measure },
     { "fan",         "pwm fan <1..6> <0..100> - direct/open-loop EMC2303 PWM", cmd_pwm_fan_set },
+    { "fan-output",  "pwm fan-output <1..6|all> [open-drain|push-pull] - set/read output type", cmd_pwm_fan_output },
     { "fan-raw",     "pwm fan-raw <1..6> <0..255> - direct EMC2303 drive register", cmd_pwm_fan_raw },
     { "fan-target",  "pwm fan-target <1..6> <rpm> - enable closed-loop RPM control", cmd_pwm_fan_target },
     { "fan-open",    "pwm fan-open <1..6> <0..100> - return to direct PWM mode", cmd_pwm_fan_open },

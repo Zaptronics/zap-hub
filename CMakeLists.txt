@@ -90,7 +90,7 @@ include(pico_sdk_import.cmake)
 
 project(Hub C CXX ASM)
 
-set(HUB_FIRMWARE_VERSION "0.2.11")
+set(HUB_FIRMWARE_VERSION "0.2.18")
 set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
 configure_file(
@@ -117,6 +117,7 @@ add_executable(Hub
     ztmb/adc.c
     drivers/ad5282.c
     drivers/ad7124.c
+    drivers/thermocouple.c
     drivers/l6470.c
     drivers/tla2518.c
     drivers/emc2303.c
