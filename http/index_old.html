@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Chamber Control System</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #111827; color: #fff; }
+    .header { background-color: #1f2937; border-bottom: 1px solid #374151; padding: 1rem; }
+    .header-content { max-width: 1400px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+    .header-title h1 { font-size: 1.5rem; font-weight: bold; }
+    .header-title p { font-size: 0.875rem; color: #9ca3af; margin-top: 0.25rem; }
+    .header-controls { display: flex; align-items: center; gap: 1rem; }
+    .status-indicator { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; }
+    .status-dot { width: 0.75rem; height: 0.75rem; border-radius: 50%; }
+    .status-dot.connected { background-color: #10b981; }
+    .status-dot.disconnected { background-color: #ef4444; }
+    .btn { padding: 0.5rem 1rem; border: none; border-radius: 0.5rem; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-connect { background-color: #10b981; color: white; }
+    .btn-connect:hover:not(:disabled) { background-color: #059669; }
+    .btn-disconnect { background-color: #ef4444; color: white; }
+    .btn-disconnect:hover:not(:disabled) { background-color: #dc2626; }
+    .btn-power-on { background-color: #10b981; color: white; }
+    .btn-power-on:hover:not(:disabled) { background-color: #059669; }
+    .btn-power-off { background-color: #ef4444; color: white; }
+    .btn-power-off:hover:not(:disabled) { background-color: #dc2626; }
+    .btn-secondary { background-color: #374151; color: white; }
+    .btn-secondary:hover:not(:disabled) { background-color: #4b5563; }
+    .btn-blue { background-color: #2563eb; color: white; }
+    .btn-blue:hover:not(:disabled) { background-color: #1d4ed8; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+    .alerts { margin-bottom: 1.5rem; }
+    .alert { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 0.5rem; }
+    .alert-warning { background-color: #78350f; border: 1px solid #92400e; color: #fef3c7; }
+    .alert-error { background-color: #7f1d1d; border: 1px solid #991b1b; color: #fee2e2; }
+    .grid { display: grid; gap: 1.5rem; margin-bottom: 1.5rem; }
+    .grid-3 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+    .card { background-color: #1f2937; border: 1px solid #374151; border-radius: 0.5rem; padding: 1.5rem; }
+    .card-title { display: flex; align-items: center; gap: 0.5rem; font-size: 1.25rem; font-weight: bold; margin-bottom: 1rem; }
+    .metric-card { background-color: #1f2937; border: 1px solid #374151; border-radius: 0.5rem; padding: 1rem; }
+    .metric-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .metric-label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #9ca3af; }
+    .metric-status { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
+    .status-optimal { background-color: #064e3b; color: #6ee7b7; }
+    .status-warning { background-color: #78350f; color: #fcd34d; }
+    .status-error { background-color: #7f1d1d; color: #fca5a5; }
+    .metric-value { font-size: 1.5rem; font-weight: bold; }
+    .metric-unit { font-size: 1.125rem; color: #9ca3af; }
+    .control-group { margin-bottom: 1rem; }
+    .control-group:last-child { margin-bottom: 0; }
+    .control-label { display: block; font-size: 0.875rem; color: #d1d5db; margin-bottom: 0.5rem; }
+    .control-input { width: 100%; background-color: #374151; color: white; padding: 0.5rem 0.75rem; border: 1px solid #4b5563; border-radius: 0.375rem; font-size: 1rem; }
+    .control-input:focus { outline: none; border-color: #2563eb; }
+    .range-display { display: flex; justify-content: space-between; font-size: 0.875rem; color: #9ca3af; margin-top: 0.25rem; }
+    .range-value { color: white; font-weight: 500; }
+    .checkbox-label { display: flex; align-items: center; justify-content: space-between; color: #d1d5db; cursor: pointer; }
+    input[type="checkbox"] { width: 1.25rem; height: 1.25rem; cursor: pointer; }
+    input[type="range"] { width: 100%; }
+    .button-group { display: flex; flex-direction: column; gap: 0.75rem; }
+    .status-info { display: flex; justify-content: space-between; font-size: 0.875rem; padding: 0.5rem 0; border-bottom: 1px solid #374151; }
+    .status-info:last-child { border-bottom: none; }
+    .status-info-label { color: #9ca3af; }
+    .status-info-value { color: white; }
+    .chart-container { position: relative; height: 300px; }
+    .icon { width: 20px; height: 20px; color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-content">
+      <div class="header-title">
+        <h1>Cloud Chamber Control System</h1>
+        <p>Real-time monitoring and control</p>
+      </div>
+      <div class="header-controls">
+        <div class="status-indicator">
+          <div class="status-dot disconnected" id="statusDot"></div>
+          <span id="statusText">Disconnected</span>
+        </div>
+        <button class="btn btn-connect" id="connectBtn">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="alerts" id="alertsContainer"></div>
+
+    <div class="grid grid-3">
+      <div class="card">
+        <h2 class="card-title">⚡ Power Control</h2>
+        <button class="btn btn-power-on" id="powerBtn" style="width: 100%; padding: 1rem; font-size: 1.125rem; font-weight: bold; margin-bottom: 1rem;" disabled>POWER ON</button>
+        <div class="status-info">
+          <span class="status-info-label">Status:</span>
+          <span class="status-info-value" id="powerStatus">STANDBY</span>
+        </div>
+        <div class="status-info">
+          <span class="status-info-label">Uptime:</span>
+          <span class="status-info-value">2h 34m</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">💡 Lighting Control</h2>
+        <div class="control-group">
+          <label class="control-label">Left Strip</label>
+          <input type="range" id="lightLeft" min="0" max="100" value="100" disabled>
+          <div class="range-display">
+            <span>Off</span>
+            <span class="range-value" id="lightLeftValue">100%</span>
+            <span>Full</span>
+          </div>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Right Strip</label>
+          <input type="range" id="lightRight" min="0" max="100" value="100" disabled>
+          <div class="range-display">
+            <span>Off</span>
+            <span class="range-value" id="lightRightValue">100%</span>
+            <span>Full</span>
+          </div>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Front Strip</label>
+          <input type="range" id="lightFront" min="0" max="100" value="100" disabled>
+          <div class="range-display">
+            <span>Off</span>
+            <span class="range-value" id="lightFrontValue">100%</span>
+            <span>Full</span>
+          </div>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Back Strip</label>
+          <input type="range" id="lightBack" min="0" max="100" value="100" disabled>
+          <div class="range-display">
+            <span>Off</span>
+            <span class="range-value" id="lightBackValue">100%</span>
+            <span>Full</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">⚡ Ion Sweeper ⚠️</h2>
+        
+        <button class="btn btn-power-on" id="sweeperBtn" style="width: 100%; padding: 0.75rem; font-size: 1rem; font-weight: bold; margin-bottom: 1rem;" disabled>
+          SWEEPER ON
+        </button>
+        
+        <div class="control-group">
+          <label class="checkbox-label">
+            <span>Auto Control</span>
+            <input type="checkbox" id="autoControl" checked disabled>
+          </label>
+        </div>
+        
+        <div class="control-group">
+          <label class="control-label">High Voltage (kV)</label>
+          <input type="range" id="highVoltage" min="1" max="6" step="0.1" value="2" disabled>
+          <div class="range-display">
+            <span>1 kV</span>
+            <span class="range-value" id="highVoltageValue">2.0 kV</span>
+            <span>6 kV</span>
+          </div>
+        </div>
+        
+        <div style="margin-top: 1rem; padding: 0.5rem; background-color: rgba(239, 68, 68, 0.1); border: 1px solid #7f1d1d; border-radius: 0.375rem;">
+          <p style="font-size: 0.75rem; color: #fca5a5; line-height: 1.4;">
+            ⚠️ <strong>WARNING:</strong> High voltage equipment. Ensure chamber is properly grounded and all safety protocols are followed before operation.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-3">
+      <div class="metric-card">
+        <div class="metric-header">
+          <div class="metric-label">🌡️ Top Plate Temperature (Hot)</div>
+          <span class="metric-status status-optimal" id="topTempStatus">optimal</span>
+        </div>
+        <div class="metric-value"><span id="topTemp">22.0</span> <span class="metric-unit">°C</span></div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <div class="metric-label">🌡️ Bottom Plate Temperature (Cold)</div>
+          <span class="metric-status status-optimal" id="bottomTempStatus">optimal</span>
+        </div>
+        <div class="metric-value"><span id="bottomTemp">-25.0</span> <span class="metric-unit">°C</span></div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <div class="metric-label">💧 Humidity</div>
+          <span class="metric-status status-optimal" id="humidityStatus">optimal</span>
+        </div>
+        <div class="metric-value"><span id="humidity">45.0</span> <span class="metric-unit">%</span></div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <div class="metric-label">📊 Pressure</div>
+          <span class="metric-status status-optimal">optimal</span>
+        </div>
+        <div class="metric-value"><span id="pressure">1013.0</span> <span class="metric-unit">hPa</span></div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <div class="metric-label">⚡ High Voltage</div>
+          <span class="metric-status" id="voltageStatus"></span>
+        </div>
+        <div class="metric-value"><span id="voltage">0.0</span> <span class="metric-unit">V</span></div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <div class="metric-label">⚡ Current Draw</div>
+          <span class="metric-status status-optimal">optimal</span>
+        </div>
+        <div class="metric-value"><span id="current">0.0</span> <span class="metric-unit">mA</span></div>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h2 class="card-title">Temperature History</h2>
+        <div class="chart-container">
+          <canvas id="tempChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">Temperature Control</h2>
+        <div class="control-group">
+          <label class="control-label">Target Top Plate Temperature (°C)</label>
+          <input type="range" id="targetTopTemp" min="15" max="35" value="25" disabled>
+          <div class="range-display">
+            <span>15°C</span>
+            <span class="range-value" id="targetTopTempValue">25°C</span>
+            <span>35°C</span>
+          </div>
+        </div>
+        <div class="control-group">
+          <label class="control-label">Target Bottom Plate Temperature (°C)</label>
+          <input type="range" id="targetBottomTemp" min="-40" max="-10" value="-30" disabled>
+          <div class="range-display">
+            <span>-40°C</span>
+            <span class="range-value" id="targetBottomTempValue">-30°C</span>
+            <span>-10°C</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var isConnected = false;
+    var isPowered = false;
+    var isSweeperOn = false;
+    var metrics = { topTemp: 22, bottomTemp: -25, humidity: 45, pressure: 1013, voltage: 0, current: 0 };
+    var settings = { targetTopTemp: 25, targetBottomTemp: -30, highVoltage: 2.0, autoControl: true };
+    var lighting = { left: 100, right: 100, front: 100, back: 100 };
+    var tempHistory = [];
+    var updateInterval = null;
+
+    var ctx = document.getElementById('tempChart').getContext('2d');
+    var chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Top Plate',
+          data: [],
+          borderColor: '#f87171',
+          backgroundColor: 'rgba(248, 113, 113, 0.1)',
+          borderWidth: 2,
+          tension: 0.4
+        }, {
+          label: 'Bottom Plate',
+          data: [],
+          borderColor: '#60a5fa',
+          backgroundColor: 'rgba(96, 165, 250, 0.1)',
+          borderWidth: 2,
+          tension: 0.4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: { labels: { color: '#9ca3af' } },
+          tooltip: {
+            enabled: true,
+            backgroundColor: '#1f2937',
+            borderColor: '#374151',
+            borderWidth: 1,
+            titleColor: '#fff',
+            bodyColor: '#fff',
+            callbacks: {
+              label: function(context) {
+                return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '°C';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' } },
+          y: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' }, title: { display: true, text: 'Temperature (°C)', color: '#9ca3af' } }
+        }
+      }
+    });
+
+    document.getElementById('connectBtn').addEventListener('click', function() {
+      isConnected = !isConnected;
+      var statusDot = document.getElementById('statusDot');
+      var statusText = document.getElementById('statusText');
+      var connectBtn = document.getElementById('connectBtn');
+      var powerBtn = document.getElementById('powerBtn');
+      
+      if (isConnected) {
+        statusDot.className = 'status-dot connected';
+        statusText.textContent = 'Connected';
+        connectBtn.textContent = 'Disconnect';
+        connectBtn.className = 'btn btn-disconnect';
+        powerBtn.disabled = false;
+        document.getElementById('autoControl').disabled = false;
+        document.getElementById('highVoltage').disabled = false;
+        document.getElementById('targetTopTemp').disabled = false;
+        document.getElementById('targetBottomTemp').disabled = false;
+        document.getElementById('lightLeft').disabled = false;
+        document.getElementById('lightRight').disabled = false;
+        document.getElementById('lightFront').disabled = false;
+        document.getElementById('lightBack').disabled = false;
+        document.getElementById('sweeperBtn').disabled = false;
+        startUpdates();
+      } else {
+        statusDot.className = 'status-dot disconnected';
+        statusText.textContent = 'Disconnected';
+        connectBtn.textContent = 'Connect';
+        connectBtn.className = 'btn btn-connect';
+        powerBtn.disabled = true;
+        document.getElementById('autoControl').disabled = true;
+        document.getElementById('highVoltage').disabled = true;
+        document.getElementById('targetTopTemp').disabled = true;
+        document.getElementById('targetBottomTemp').disabled = true;
+        document.getElementById('lightLeft').disabled = true;
+        document.getElementById('lightRight').disabled = true;
+        document.getElementById('lightFront').disabled = true;
+        document.getElementById('lightBack').disabled = true;
+        document.getElementById('sweeperBtn').disabled = true;
+        stopUpdates();
+      }
+    });
+
+    async function api(path){
+      const r = await fetch(path);
+      const t = await r.text();
+      console.log(t)
+      //document.getElementById('out').textContent = t;
+    }
+
+    function pumpStart(n){ api(`/api/pump/start/${n}`); }
+    function pumpStop(n){ api(`/api/pump/stop/${n}`); }
+
+    document.getElementById('powerBtn').addEventListener('click', function() {
+      isPowered = !isPowered;
+      var powerBtn = document.getElementById('powerBtn');
+      var powerStatus = document.getElementById('powerStatus');
+      
+      if (isPowered) {
+        powerBtn.textContent = 'POWER OFF';
+        powerBtn.className = 'btn btn-power-off';
+        powerBtn.style.cssText = 'width: 100%; padding: 1rem; font-size: 1.125rem; font-weight: bold; margin-bottom: 1rem;';
+        powerStatus.textContent = 'ACTIVE';
+        powerStatus.style.color = '#6ee7b7';
+        pumpStart(1);
+      } else {
+        powerBtn.textContent = 'POWER ON';
+        powerBtn.className = 'btn btn-power-on';
+        powerBtn.style.cssText = 'width: 100%; padding: 1rem; font-size: 1.125rem; font-weight: bold; margin-bottom: 1rem;';
+        powerStatus.textContent = 'STANDBY';
+        powerStatus.style.color = '#ffffff';
+        pumpStop(1);
+      }
+    });
+
+    document.getElementById('targetTopTemp').addEventListener('input', function(e) {
+      settings.targetTopTemp = parseInt(e.target.value);
+      document.getElementById('targetTopTempValue').textContent = settings.targetTopTemp + '°C';
+    });
+
+    document.getElementById('targetBottomTemp').addEventListener('input', function(e) {
+      settings.targetBottomTemp = parseInt(e.target.value);
+      document.getElementById('targetBottomTempValue').textContent = settings.targetBottomTemp + '°C';
+    });
+
+    document.getElementById('highVoltage').addEventListener('input', function(e) {
+      settings.highVoltage = parseFloat(e.target.value);
+      document.getElementById('highVoltageValue').textContent = settings.highVoltage.toFixed(1) + ' kV';
+    });
+
+    document.getElementById('lightLeft').addEventListener('input', function(e) {
+      lighting.left = parseInt(e.target.value);
+      document.getElementById('lightLeftValue').textContent = lighting.left + '%';
+    });
+
+    document.getElementById('lightRight').addEventListener('input', function(e) {
+      lighting.right = parseInt(e.target.value);
+      document.getElementById('lightRightValue').textContent = lighting.right + '%';
+    });
+
+    document.getElementById('lightFront').addEventListener('input', function(e) {
+      lighting.front = parseInt(e.target.value);
+      document.getElementById('lightFrontValue').textContent = lighting.front + '%';
+    });
+
+    document.getElementById('lightBack').addEventListener('input', function(e) {
+      lighting.back = parseInt(e.target.value);
+      document.getElementById('lightBackValue').textContent = lighting.back + '%';
+    });
+
+    document.getElementById('sweeperBtn').addEventListener('click', function() {
+      isSweeperOn = !isSweeperOn;
+      var sweeperBtn = document.getElementById('sweeperBtn');
+      
+      if (isSweeperOn) {
+        sweeperBtn.textContent = 'SWEEPER OFF';
+        sweeperBtn.className = 'btn btn-power-off';
+        sweeperBtn.style.cssText = 'width: 100%; padding: 0.75rem; font-size: 1rem; font-weight: bold; margin-bottom: 1rem;';
+      } else {
+        sweeperBtn.textContent = 'SWEEPER ON';
+        sweeperBtn.className = 'btn btn-power-on';
+        sweeperBtn.style.cssText = 'width: 100%; padding: 0.75rem; font-size: 1rem; font-weight: bold; margin-bottom: 1rem;';
+      }
+    });
+
+    function updateMetrics() {
+      metrics.topTemp += (Math.random() - 0.5) * 0.3;
+      metrics.bottomTemp += (Math.random() - 0.5) * 0.5;
+      metrics.humidity = Math.max(0, Math.min(100, metrics.humidity + (Math.random() - 0.5) * 2));
+      metrics.pressure += (Math.random() - 0.5) * 0.5;
+      metrics.voltage = isPowered ? settings.highVoltage * 1000 + (Math.random() - 0.5) * 50 : 0;
+      metrics.current = isPowered ? 0.5 + Math.random() * 0.1 : 0;
+
+      document.getElementById('topTemp').textContent = metrics.topTemp.toFixed(1);
+      document.getElementById('bottomTemp').textContent = metrics.bottomTemp.toFixed(1);
+      document.getElementById('humidity').textContent = metrics.humidity.toFixed(1);
+      document.getElementById('pressure').textContent = metrics.pressure.toFixed(1);
+      document.getElementById('voltage').textContent = metrics.voltage.toFixed(1);
+      document.getElementById('current').textContent = metrics.current.toFixed(1);
+
+      var topTempStatus = document.getElementById('topTempStatus');
+      if (metrics.topTemp > 20 && metrics.topTemp < 30) {
+        topTempStatus.textContent = 'optimal';
+        topTempStatus.className = 'metric-status status-optimal';
+      } else {
+        topTempStatus.textContent = 'warning';
+        topTempStatus.className = 'metric-status status-warning';
+      }
+
+      var bottomTempStatus = document.getElementById('bottomTempStatus');
+      if (metrics.bottomTemp < -25) {
+        bottomTempStatus.textContent = 'optimal';
+        bottomTempStatus.className = 'metric-status status-optimal';
+      } else if (metrics.bottomTemp < -20) {
+        bottomTempStatus.textContent = 'warning';
+        bottomTempStatus.className = 'metric-status status-warning';
+      } else {
+        bottomTempStatus.textContent = 'error';
+        bottomTempStatus.className = 'metric-status status-error';
+      }
+
+      var humidityStatus = document.getElementById('humidityStatus');
+      if (metrics.humidity < 50) {
+        humidityStatus.textContent = 'optimal';
+        humidityStatus.className = 'metric-status status-optimal';
+      } else if (metrics.humidity < 60) {
+        humidityStatus.textContent = 'warning';
+        humidityStatus.className = 'metric-status status-warning';
+      } else {
+        humidityStatus.textContent = 'error';
+        humidityStatus.className = 'metric-status status-error';
+      }
+
+      var voltageStatus = document.getElementById('voltageStatus');
+      if (!isSweeperOn) {
+        voltageStatus.textContent = '';
+      } else if (metrics.voltage > 1800) {
+        voltageStatus.textContent = 'optimal';
+        voltageStatus.className = 'metric-status status-optimal';
+      } else {
+        voltageStatus.textContent = 'warning';
+        voltageStatus.className = 'metric-status status-warning';
+      }
+
+      var timestamp = new Date().toLocaleTimeString();
+      tempHistory.push({ time: timestamp, topTemp: metrics.topTemp, bottomTemp: metrics.bottomTemp });
+
+      if (tempHistory.length > 20) {
+        tempHistory.shift();
+      }
+
+      chart.data.labels = tempHistory.map(function(d) { return d.time; });
+      chart.data.datasets[0].data = tempHistory.map(function(d) { return d.topTemp; });
+      chart.data.datasets[1].data = tempHistory.map(function(d) { return d.bottomTemp; });
+      chart.update('none');
+
+      updateAlerts();
+    }
+
+    function updateAlerts() {
+      var alerts = [];
+      if (metrics.bottomTemp > -20) {
+        alerts.push({ type: 'warning', msg: 'Bottom plate temperature too high' });
+      }
+      if (metrics.humidity > 60) {
+        alerts.push({ type: 'warning', msg: 'Humidity level elevated' });
+      }
+      if (isSweeperOn && metrics.voltage < 1500) {
+        alerts.push({ type: 'error', msg: 'Ion sweeper voltage below threshold' });
+      }
+
+      var alertsContainer = document.getElementById('alertsContainer');
+      alertsContainer.innerHTML = '';
+      for (var i = 0; i < alerts.length; i++) {
+        var alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-' + alerts[i].type;
+        alertDiv.innerHTML = '<span>⚠️</span><span>' + alerts[i].msg + '</span>';
+        alertsContainer.appendChild(alertDiv);
+      }
+    }
+
+    function startUpdates() {
+      updateInterval = setInterval(updateMetrics, 1000);
+    }
+
+    function stopUpdates() {
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
+      }
+    }
+  </script>
+</body>
+</html>

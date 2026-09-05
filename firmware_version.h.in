@@ -1,0 +1,4 @@
+#pragma once
+
+#define HUB_FIRMWARE_VERSION "@HUB_FIRMWARE_VERSION@"
+#define HUB_FIRMWARE_NAME    "Hub"

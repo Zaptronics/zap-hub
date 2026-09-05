@@ -1,0 +1,552 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ee280be..63d24d8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -75,7 +75,7 @@ include(pico_sdk_import.cmake)
+ 
+ project(Hub C CXX ASM)
+ 
+-set(HUB_FIRMWARE_VERSION "0.2.25")
++set(HUB_FIRMWARE_VERSION "0.2.26")
+ set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+ file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
+ configure_file(
+diff --git a/cmake/zap_deps.cmake b/cmake/zap_deps.cmake
+index 20d53f7..01b4bd1 100644
+--- a/cmake/zap_deps.cmake
++++ b/cmake/zap_deps.cmake
+@@ -19,7 +19,7 @@ else()
+     FetchContent_Declare(
+         zapee
+         GIT_REPOSITORY "git@github.com:Zaptronics/zap-ee.git"
+-        GIT_TAG        "v0.4.0"
++        GIT_TAG        "v0.4.1"
+         GIT_SHALLOW    TRUE
+         GIT_PROGRESS   TRUE
+         SOURCE_DIR     "${ZAP_DEPS_DIR}/zapee"
+diff --git a/cmds.h b/cmds.h
+index d58aaf4..5647d6b 100644
+--- a/cmds.h
++++ b/cmds.h
+@@ -2767,12 +2767,16 @@ static void print_adc_last_measurement(void)
+ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
+ {
+     (void)argc; (void)argv; (void)out; (void)out_len;
+-    const ztm_adc_t *module = &ztm_adc_1;
++    ztm_adc_status_t module_status;
++    if (!ztm_adc_get_status(&module_status)) {
++        console_printf("\r\nAD7124 module: diagnostics unavailable\r\n");
++        return -1;
++    }
+     const bus_spi_t *adc_bus = ztmb_ztm_adc_bus();
+ 
+-    console_printf("\r\nAD7124 module: %s\r\n", ztm_adc_ready() ? "READY" : "NOT READY");
++    console_printf("\r\nAD7124 module: %s\r\n", module_status.ready ? "READY" : "NOT READY");
+     console_printf("  ID: 0x%02X; SPI%u, %lu Hz, mode %u, CS line %u\r\n",
+-                   (unsigned)module->device_id,
++                   (unsigned)module_status.device_id,
+                    adc_bus && adc_bus->spi == spi0 ? 0u : 1u,
+                    adc_bus ? (unsigned long)adc_bus->config.baud_hz : 0ul,
+                    adc_bus ? (unsigned)((adc_bus->config.cpol ? 2u : 0u) |
+@@ -2782,21 +2786,21 @@ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
+     console_printf("  CJC: CH3 AIN6/AIN15 Pt1000; RTD1..8: CH4..11 AIN7..14/AIN15\r\n");
+     console_printf("  RTD return: RTD_R is sensed directly by REFIN1+ and through 100 ohm by AIN15\r\n");
+     console_printf("  RTD: REFIN1 ratiometric, Rref=%.1f ohm, IOUT0=500 uA, one sensor at a time\r\n",
+-                   module->reference_resistor_ohms);
++                   module_status.reference_resistor_ohms);
+     console_printf("  At a 1 kohm Pt1000: expect RTD_R/REFIN1+=~1.0 V and sensor AIN+=~1.5 V\r\n");
+     console_printf("  TC types: TC1=%s TC2=%s TC3=%s; default Type K; runtime configurable\r\n",
+-                   thermocouple_type_name(module->thermocouple_types[0]),
+-                   thermocouple_type_name(module->thermocouple_types[1]),
+-                   thermocouple_type_name(module->thermocouple_types[2]));
++                   thermocouple_type_name(module_status.thermocouple_types[0]),
++                   thermocouple_type_name(module_status.thermocouple_types[1]),
++                   thermocouple_type_name(module_status.thermocouple_types[2]));
+     console_printf("  Configuration: %s; verify failures=%lu\r\n",
+-                   module->configuration_verified ? "VERIFIED" : "NOT VERIFIED",
+-                   (unsigned long)module->configuration_error_count);
++                   module_status.configuration_verified ? "VERIFIED" : "NOT VERIFIED",
++                   (unsigned long)module_status.configuration_error_count);
+     console_printf("  Error events=%lu, communication errors=%lu, last mask=0x%06lX\r\n",
+-                   (unsigned long)module->error_event_count,
+-                   (unsigned long)module->communication_error_count,
+-                   (unsigned long)module->last_error_mask);
++                   (unsigned long)module_status.error_event_count,
++                   (unsigned long)module_status.communication_error_count,
++                   (unsigned long)module_status.last_error_mask);
+ 
+-    if (!ztm_adc_ready()) {
++    if (!module_status.ready) {
+         return -1;
+     }
+ 
+diff --git a/modules/ztm_adc.h b/modules/ztm_adc.h
+index a6569cc..f834fa2 100644
+--- a/modules/ztm_adc.h
++++ b/modules/ztm_adc.h
+@@ -47,5 +47,7 @@
+     ztm_adc_calibrate_all(&ztm_adc_1)
+ #define ztm_adc_iout_off() \
+     ztm_adc_iout_off(&ztm_adc_1)
++#define ztm_adc_get_status(status) \
++    ztm_adc_get_status(&ztm_adc_1, (status))
+ #define ztm_adc_get_last_measurement(diag) \
+     ztm_adc_get_last_measurement(&ztm_adc_1, (diag))
+diff --git a/zap.ps1 b/zap.ps1
+index 78fc828..e7cfc1c 100644
+--- a/zap.ps1
++++ b/zap.ps1
+@@ -430,7 +430,7 @@ function Write-NewConfig {
+         '  zapee:',
+         '    type: git',
+         '    uri: git@github.com:Zaptronics/zap-ee.git',
+-        '    version: v0.4.0',
++        '    version: v0.4.1',
+         '    override_var: ZAPEE_SOURCE',
+         '    zephyr_module: true',
+         '    components:',
+@@ -481,6 +481,55 @@ function Invoke-Native {
+     }
+ }
+ 
++function Invoke-NativeCapture {
++    param([string]$Program, [string[]]$ArgumentList)
++    $output = @(& $Program @ArgumentList 2>&1)
++    $exitCode = $LASTEXITCODE
++    return [pscustomobject]@{
++        ExitCode = $exitCode
++        Output = @($output | ForEach-Object { [string]$_ })
++    }
++}
++
++function Assert-GitCheckoutClean {
++    param([string]$Git, [string]$Name, [string]$Path)
++    $result = Invoke-NativeCapture -Program $Git -ArgumentList @('-C', $Path, 'status', '--porcelain', '--untracked-files=normal')
++    if ($result.ExitCode -ne 0) {
++        throw "Unable to inspect dependency '$Name' at '$Path'."
++    }
++    if ($result.Output.Count -gt 0) {
++        $preview = @($result.Output | Select-Object -First 8) -join "`n  "
++        throw "Dependency '$Name' has local changes in '$Path'. zap will not overwrite them.`n  $preview`nCommit/stash them, or use a separate local override via its override_var."
++    }
++}
++
++function Test-GitRevision {
++    param([string]$Git, [string]$Path, [string]$Revision)
++    $verify = Invoke-NativeCapture -Program $Git -ArgumentList @('-C', $Path, 'rev-parse', '--verify', '--quiet', "${Revision}^{commit}")
++    return $verify.ExitCode -eq 0
++}
++
++function Resolve-GitRevision {
++    param([string]$Git, [string]$Path, [string]$Revision)
++    if (Test-GitRevision -Git $Git -Path $Path -Revision $Revision) {
++        return $Revision
++    }
++    $remoteRevision = "origin/$Revision"
++    if (Test-GitRevision -Git $Git -Path $Path -Revision $remoteRevision) {
++        return $remoteRevision
++    }
++    return ''
++}
++
++function Get-GitValue {
++    param([string]$Git, [string]$Path, [string[]]$ArgumentList)
++    $result = Invoke-NativeCapture -Program $Git -ArgumentList (@('-C', $Path) + $ArgumentList)
++    if ($result.ExitCode -ne 0 -or $result.Output.Count -eq 0) {
++        return ''
++    }
++    return [string]$result.Output[0]
++}
++
+ function Sync-Dependencies {
+     param($Config)
+     foreach ($name in $Config.dependencies.Keys) {
+@@ -508,8 +557,13 @@ function Sync-Dependencies {
+                     Invoke-Native -Program $git.Source -ArgumentList @('clone', [string]$dep.uri, $path)
+                 }
+                 Write-Host "Synchronising $name @ $($dep.version)"
++                Assert-GitCheckoutClean -Git $git.Source -Name $name -Path $path
+                 Invoke-Native -Program $git.Source -ArgumentList @('-C', $path, 'fetch', '--tags', '--prune', 'origin')
+-                Invoke-Native -Program $git.Source -ArgumentList @('-C', $path, 'checkout', '--detach', [string]$dep.version)
++                $resolvedRevision = Resolve-GitRevision -Git $git.Source -Path $path -Revision ([string]$dep.version)
++                if (-not $resolvedRevision) {
++                    throw "Dependency '$name' requested Git ref '$($dep.version)', but that ref was not found after fetching '$($dep.uri)'. Check the version in zap.yml and make sure the tag/branch has been pushed."
++                }
++                Invoke-Native -Program $git.Source -ArgumentList @('-C', $path, 'checkout', '--detach', $resolvedRevision)
+             }
+             'path' {
+                 if (-not (Test-Path -LiteralPath $path)) { throw "Local dependency '$name' was not found at '$path'." }
+@@ -622,13 +676,13 @@ function New-Adapter {
+     if (Test-Path -LiteralPath $outDir) { throw "Adapter directory '$outDir' already exists." }
+     New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+ 
+-    $guard = ('ZAP_' + $Name.ToUpperInvariant() + '_ADAPTER_H')
+     $h = @"
+ // SPDX-License-Identifier: Apache-2.0
+ #pragma once
+ 
+ #include <stdbool.h>
+ #include <stdint.h>
++#include <zaptronics/modules/ztm_adc.h>
+ #include <zaptronics/modules/ztm_pwm.h>
+ 
+ #ifdef __cplusplus
+@@ -637,6 +691,8 @@ extern "C" {
+ 
+ typedef struct {
+     zap_i2c_bus_t i2c;
++    zap_spi_device_t spi;
++    zap_lock_t operation_lock;
+     zap_time_t time;
+     void *platform_context;
+ } zap_${Name}_adapter_t;
+@@ -657,6 +713,12 @@ void zap_${Name}_ztm_pwm_config(ztm_pwm_config_t *config,
+                                 void *event_context,
+                                 ztm_pwm_event_fn event);
+ 
++/* Fill a ZTM_ADC configuration with this adapter's SPI/time/operation lock. */
++void zap_${Name}_ztm_adc_config(ztm_adc_config_t *config,
++                                zap_${Name}_adapter_t *adapter,
++                                void *event_context,
++                                ztm_adc_event_fn event);
++
+ #ifdef __cplusplus
+ }
+ #endif
+@@ -711,15 +773,60 @@ static int platform_i2c_probe(void *context, uint8_t address_7bit, uint32_t time
+     return ZAP_I2C_E_UNSUPPORTED;
+ }
+ 
+-static int platform_lock(void *context, uint32_t timeout_us)
++static int platform_i2c_lock(void *context, uint32_t timeout_us)
+ {
+     (void)context;
+     (void)timeout_us;
+-    /* Optional for bare metal. Replace with an RTOS/OS mutex when needed. */
++    /* Optional: lock the shared I2C controller. Return 0 on success. */
+     return ZAP_I2C_OK;
+ }
+ 
+-static void platform_unlock(void *context)
++static void platform_i2c_unlock(void *context)
++{
++    (void)context;
++}
++
++static int platform_spi_begin(void *context, uint32_t timeout_us)
++{
++    (void)context;
++    (void)timeout_us;
++    /* TODO: lock/configure the shared SPI controller and assert this device's CS. */
++    return ZAP_SPI_E_UNSUPPORTED;
++}
++
++static int platform_spi_transfer(void *context,
++                                 const uint8_t *tx,
++                                 uint8_t *rx,
++                                 size_t len,
++                                 uint8_t read_fill,
++                                 uint32_t timeout_us)
++{
++    (void)context;
++    (void)tx;
++    (void)rx;
++    (void)len;
++    (void)read_fill;
++    (void)timeout_us;
++    /* TODO: transfer while CS remains asserted. Use read_fill for read-only clocks. */
++    return ZAP_SPI_E_UNSUPPORTED;
++}
++
++static int platform_spi_end(void *context)
++{
++    (void)context;
++    /* TODO: deassert CS and release the shared SPI controller. */
++    return ZAP_SPI_E_UNSUPPORTED;
++}
++
++static int platform_operation_lock(void *context, uint32_t timeout_us)
++{
++    (void)context;
++    (void)timeout_us;
++    /* Optional: lock one module instance across complete multi-register operations. */
++    return 0;
++}
++
++static void platform_operation_unlock(void *context)
+ {
+     (void)context;
+ }
+@@ -731,27 +838,61 @@ static void platform_delay_ms(void *context, uint32_t delay_ms)
+     /* TODO: call your platform millisecond delay/sleep primitive. */
+ }
+ 
++static void platform_delay_us(void *context, uint32_t delay_us)
++{
++    (void)context;
++    (void)delay_us;
++    /* TODO: call your platform microsecond delay primitive. */
++}
++
++static uint64_t platform_now_us(void *context)
++{
++    (void)context;
++    /* TODO: return a monotonic microsecond timebase. */
++    return 0u;
++}
++
+ static const zap_i2c_bus_ops_t g_i2c_ops = {
+     .write = platform_i2c_write,
+     .write_read = platform_i2c_write_read,
+     .probe = platform_i2c_probe,
+-    .lock = platform_lock,
+-    .unlock = platform_unlock,
++    .lock = platform_i2c_lock,
++    .unlock = platform_i2c_unlock,
++};
++
++static const zap_spi_device_ops_t g_spi_ops = {
++    .begin = platform_spi_begin,
++    .transfer = platform_spi_transfer,
++    .end = platform_spi_end,
+ };
+ 
+ int zap_${Name}_adapter_init(zap_${Name}_adapter_t *adapter, void *platform_context)
+ {
+     if (adapter == NULL) {
+-        return ZAP_I2C_E_BAD_ARG;
++        return -1;
+     }
+     memset(adapter, 0, sizeof(*adapter));
+     adapter->platform_context = platform_context;
++
+     adapter->i2c.context = platform_context;
+     adapter->i2c.ops = &g_i2c_ops;
+     adapter->i2c.timeout_us = ZAP_I2C_DEFAULT_TIMEOUT_US;
++
++    adapter->spi.context = platform_context;
++    adapter->spi.ops = &g_spi_ops;
++    adapter->spi.timeout_us = ZAP_SPI_DEFAULT_TIMEOUT_US;
++    adapter->spi.read_fill = 0u;
++
++    adapter->operation_lock.context = platform_context;
++    adapter->operation_lock.acquire = platform_operation_lock;
++    adapter->operation_lock.release = platform_operation_unlock;
++    adapter->operation_lock.timeout_us = ZTM_ADC_OPERATION_TIMEOUT_US;
++
+     adapter->time.context = platform_context;
+     adapter->time.delay_ms = platform_delay_ms;
+-    return ZAP_I2C_OK;
++    adapter->time.delay_us = platform_delay_us;
++    adapter->time.now_us = platform_now_us;
++    return 0;
+ }
+ 
+ void zap_${Name}_ztm_pwm_config(ztm_pwm_config_t *config,
+@@ -776,6 +917,22 @@ void zap_${Name}_ztm_pwm_config(ztm_pwm_config_t *config,
+     config->event_context = event_context;
+     config->event = event;
+ }
++
++void zap_${Name}_ztm_adc_config(ztm_adc_config_t *config,
++                                zap_${Name}_adapter_t *adapter,
++                                void *event_context,
++                                ztm_adc_event_fn event)
++{
++    if (config == NULL || adapter == NULL) {
++        return;
++    }
++    memset(config, 0, sizeof(*config));
++    config->spi = &adapter->spi;
++    config->time = &adapter->time;
++    config->lock = &adapter->operation_lock;
++    config->event_context = event_context;
++    config->event = event;
++}
+ "@
+ 
+     $readme = @"
+@@ -783,14 +940,16 @@ void zap_${Name}_ztm_pwm_config(ztm_pwm_config_t *config,
+ 
+ Generated by `zap adapter $Name`.
+ 
+-1. Implement the I2C callbacks in `zap_${Name}_adapter.c` using your MCU/RTOS SDK.
+-2. `write_read()` must perform one atomic write / repeated-start / read transaction.
+-3. Keep `lock` / `unlock` for threaded systems; set both function pointers to NULL for a deliberately unlocked bare-metal bus.
+-4. Implement the delay callback.
+-5. Supply the ZTM_PWM power-enable and IRQ callbacks from your board/application layer.
++The skeleton exposes the portable interfaces currently used by ZapEE modules:
++
++1. Implement the I2C callbacks for I2C-based modules such as ZTM_PWM. `write_read()` must be one atomic write / repeated-start / read transaction.
++2. Implement SPI `begin` / `transfer` / `end` for SPI-based modules such as ZTM_ADC. Keep the selected device active from `begin` until `end` and configure the bus for that endpoint before the first transfer.
++3. Replace the bus/operation lock TODOs with your RTOS/OS mutexes when concurrency is possible. For deliberately single-threaded bare metal, set the relevant lock callbacks/pointers to NULL instead.
++4. Implement millisecond delay, microsecond delay, and a monotonic microsecond clock.
++5. Supply ZTM_PWM power-enable/IRQ callbacks from your board layer when that module is used.
+ 6. Add this `.c` file to your application target; ZapEE itself remains unchanged.
+ 
+-The generated code intentionally returns `ZAP_I2C_E_UNSUPPORTED` until the platform-specific TODOs are implemented.
++Unused interfaces may be removed from the application-owned skeleton. The generated transport callbacks intentionally return `*_E_UNSUPPORTED` until platform-specific TODOs are implemented.
+ "@
+ 
+     [System.IO.File]::WriteAllText((Join-Path $outDir "zap_${Name}_adapter.h"), $h, (New-Object System.Text.UTF8Encoding($false)))
+@@ -799,6 +958,99 @@ The generated code intentionally returns `ZAP_I2C_E_UNSUPPORTED` until the platf
+     Write-Host "Created adapter skeleton in $outDir"
+ }
+ 
++function Show-Status {
++    param($Config)
++    Write-Host "Environment : $(Get-ProjectValue $Config 'environment' 'generic')"
++    Write-Host "Target      : $(Get-ProjectValue $Config 'target' '')"
++    Write-Host "Dependencies:"
++
++    foreach ($name in $Config.dependencies.Keys) {
++        $dep = $Config.dependencies[$name]
++        $type = ([string]$dep.type).ToLowerInvariant()
++        $path = Resolve-DependencyPath $Config $name $dep
++        $overrideVar = [string]$dep.override_var
++        $override = if ($overrideVar) { [Environment]::GetEnvironmentVariable($overrideVar) } else { '' }
++
++        Write-Host "  $name"
++        Write-Host "    configured : $type $($dep.uri) $($dep.version)"
++        Write-Host "    source     : $path"
++        if ($override) {
++            Write-Host "    override   : $overrideVar=$override"
++        }
++
++        if ($type -eq 'git' -and (Test-Path -LiteralPath (Join-Path $path '.git'))) {
++            $git = Get-Command git -ErrorAction SilentlyContinue
++            if (-not $git) {
++                Write-Host '    checkout   : git not found'
++                continue
++            }
++            $origin = Get-GitValue -Git $git.Source -Path $path -ArgumentList @('remote', 'get-url', 'origin')
++            $head = Get-GitValue -Git $git.Source -Path $path -ArgumentList @('rev-parse', '--short=12', 'HEAD')
++            $dirty = Invoke-NativeCapture -Program $git.Source -ArgumentList @('-C', $path, 'status', '--porcelain', '--untracked-files=normal')
++            $state = if ($dirty.ExitCode -ne 0) { 'unknown' } elseif ($dirty.Output.Count -gt 0) { 'DIRTY' } else { 'clean' }
++            $match = 'unknown'
++            $revision = [string]$dep.version
++            $resolvedRevision = Resolve-GitRevision -Git $git.Source -Path $path -Revision $revision
++            if ($resolvedRevision) {
++                $wanted = Get-GitValue -Git $git.Source -Path $path -ArgumentList @('rev-parse', '--short=12', "${resolvedRevision}^{commit}")
++                $match = if ($wanted -and $head -eq $wanted) { 'yes' } else { 'no' }
++            } else {
++                $match = 'ref not fetched/found'
++            }
++            Write-Host "    origin     : $origin"
++            Write-Host "    HEAD       : $head"
++            Write-Host "    worktree   : $state"
++            Write-Host "    version ok : $match"
++        } elseif ($type -eq 'git') {
++            Write-Host '    checkout   : not fetched'
++        } elseif (Test-Path -LiteralPath $path) {
++            Write-Host '    checkout   : present'
++        } else {
++            Write-Host '    checkout   : missing'
++        }
++    }
++}
++
++function Show-AvailableVersions {
++    param($Config, [string]$Name)
++    if (-not $Config.dependencies.Contains($Name)) {
++        throw "Unknown dependency '$Name'."
++    }
++    $dep = $Config.dependencies[$Name]
++    if (([string]$dep.type).ToLowerInvariant() -ne 'git') {
++        throw "Dependency '$Name' is not a Git dependency."
++    }
++    $git = Get-Command git -ErrorAction SilentlyContinue
++    if (-not $git) { throw 'git is required to query dependency versions.' }
++
++    Write-Host "$Name currently uses $($dep.version)"
++    Write-Host "Querying $($dep.uri) ..."
++    $result = Invoke-NativeCapture -Program $git.Source -ArgumentList @('ls-remote', '--tags', '--refs', [string]$dep.uri)
++    if ($result.ExitCode -ne 0) {
++        throw "Unable to query tags for '$Name' from '$($dep.uri)'."
++    }
++
++    $tags = @()
++    foreach ($line in $result.Output) {
++        if ($line -match 'refs/tags/(.+)$') {
++            $tags += $Matches[1]
++        }
++    }
++    $releaseTags = @($tags | Where-Object { $_ -match '^v?\d+\.\d+\.\d+$' } |
++        Sort-Object -Property @{ Expression = { [version](($_ -replace '^v', '')) }; Descending = $true })
++
++    if ($releaseTags.Count -eq 0) {
++        Write-Host 'No x.y.z release tags were found.'
++        return
++    }
++    Write-Host 'Available releases (newest first):'
++    foreach ($tag in @($releaseTags | Select-Object -First 12)) {
++        $marker = if ($tag -eq [string]$dep.version) { '  *' } else { '   ' }
++        Write-Host "$marker $tag"
++    }
++    Write-Host "Use '.\\zap version $Name <tag>' to select a release."
++}
++
+ function Show-List {
+     param($Config)
+     Write-Host "Environment : $(Get-ProjectValue $Config 'environment' 'generic')"
+@@ -830,6 +1082,12 @@ Zap project dependency helper
+   .\zap list
+       Show dependency sources, versions, and selected component targets.
+ 
++  .\zap status
++      Show resolved dependency paths, Git HEADs, dirty state, and whether each checkout matches zap.yml.
++
++  .\zap update <dependency>
++      Query the dependency remote and show the newest release tags without changing zap.yml.
++
+   .\zap version <dependency> <version-or-git-ref>
+       Change a dependency version/ref in zap.yml and regenerate CMake glue.
+ 
+@@ -840,7 +1098,7 @@ Zap project dependency helper
+       Remove a component target.
+ 
+   .\zap adapter [name]
+-      Generate a portable I2C/time + ZTM_PWM adapter skeleton in project.adapters_dir.
++      Generate a portable I2C/SPI/lock/time adapter skeleton for ZTM_PWM/ZTM_ADC in project.adapters_dir.
+ 
+ zap.yml intentionally uses a small, documented YAML subset so this script has no Python,
+ PowerShell-module, or package-manager dependency. Standard CMake/FetchContent and Zephyr
+@@ -877,6 +1135,11 @@ switch ($Command.ToLowerInvariant()) {
+         Write-Host 'zap.yml, generated CMake glue, and CMake integration are in sync.'
+     }
+     'list' { Show-List (Read-ZapConfig) }
++    'status' { Show-Status (Read-ZapConfig) }
++    'update' {
++        if ($Arguments.Count -lt 1) { throw 'Usage: .\zap update <dependency>' }
++        Show-AvailableVersions (Read-ZapConfig) $Arguments[0]
++    }
+     'version' {
+         if ($Arguments.Count -lt 2) { throw 'Usage: .\\zap version <dependency> <version-or-ref>' }
+         $config = Read-ZapConfig
+diff --git a/zap.yml b/zap.yml
+index 602593a..c055247 100644
+--- a/zap.yml
++++ b/zap.yml
+@@ -13,7 +13,7 @@ dependencies:
+   zapee:
+     type: git
+     uri: git@github.com:Zaptronics/zap-ee.git
+-    version: v0.4.0
++    version: v0.4.1
+     override_var: ZAPEE_SOURCE
+     zephyr_module: true
+     components:
+diff --git a/ztmb/ztm_adc_adapter.c b/ztmb/ztm_adc_adapter.c
+index 01d0b43..e36dff7 100644
+--- a/ztmb/ztm_adc_adapter.c
++++ b/ztmb/ztm_adc_adapter.c
+@@ -47,8 +47,7 @@ static void adc_event(void *context, const ztm_adc_event_t *event)
+ 
+     switch (event->type) {
+         case ZTM_ADC_EVENT_READY:
+-            log_printf("AD7124-8 ready: ID=0x%02X, 3 TC + CJC Pt1000 + 8 RTD\n",
+-                       ztm_adc_1.device_id);
++            log_printf("AD7124-8 ready: 3 TC + CJC Pt1000 + 8 RTD\n");
+             break;
+         case ZTM_ADC_EVENT_UNEXPECTED_RESET:
+             log_printf("ERROR: AD7124 Unexpected Reset! status=0x%02X\n",

@@ -1,0 +1,21 @@
+# Zap dependency manifest
+schema: 1
+
+project:
+  environment: pico-sdk
+  target: Hub
+  board: pico2_w
+  build_dir: build
+  deps_dir: deps
+  adapters_dir: adapters
+
+dependencies:
+  zapee:
+    type: git
+    uri: git@github.com:Zaptronics/zap-ee.git
+    version: v0.4.1
+    override_var: ZAPEE_SOURCE
+    zephyr_module: true
+    components:
+      - zap::ztm_pwm
+      - zap::ztm_adc

@@ -1,0 +1,56 @@
+--- a/zap.ps1
++++ b/zap.ps1
+@@ -461,8 +461,8 @@
+ }
+ 
+ function Invoke-Native {
+-    param([string]$Program, [string[]]$Args)
+-    & $Program @Args
++    param([string]$Program, [string[]]$ArgumentList)
++    & $Program @ArgumentList
+     if ($LASTEXITCODE -ne 0) {
+         throw "'$Program' failed with exit code $LASTEXITCODE."
+     }
+@@ -492,11 +492,11 @@
+                         if ($items.Count -gt 0) { throw "Dependency directory '$path' exists but is not a Git checkout." }
+                     }
+                     Write-Host "Cloning $name -> $path"
+-                    Invoke-Native $git.Source @('clone', [string]$dep.uri, $path)
++                    Invoke-Native -Program $git.Source -ArgumentList @('clone', [string]$dep.uri, $path)
+                 }
+                 Write-Host "Synchronising $name @ $($dep.version)"
+-                Invoke-Native $git.Source @('-C', $path, 'fetch', '--tags', '--prune', 'origin')
+-                Invoke-Native $git.Source @('-C', $path, 'checkout', '--detach', [string]$dep.version)
++                Invoke-Native -Program $git.Source -ArgumentList @('-C', $path, 'fetch', '--tags', '--prune', 'origin')
++                Invoke-Native -Program $git.Source -ArgumentList @('-C', $path, 'checkout', '--detach', [string]$dep.version)
+             }
+             'path' {
+                 if (-not (Test-Path -LiteralPath $path)) { throw "Local dependency '$name' was not found at '$path'." }
+@@ -522,9 +522,9 @@
+             if (-not (Test-Path -LiteralPath $buildScript)) {
+                 throw 'pico-sdk environment expects build.ps1 in the project root.'
+             }
+-            $args = @('-ConfigureOnly', '-BuildDir', $buildDir)
+-            if ($board) { $args += @('-Board', $board) }
+-            & $buildScript @args
++            $buildArgs = @('-ConfigureOnly', '-BuildDir', $buildDir)
++            if ($board) { $buildArgs += @('-Board', $board) }
++            & $buildScript @buildArgs
+             if ($LASTEXITCODE -ne 0) { throw "build.ps1 configure failed with exit code $LASTEXITCODE." }
+         }
+         'zephyr' {
+@@ -551,12 +551,12 @@
+                 $westArgs += '--'
+                 $westArgs += $cmakeArgs
+             }
+-            Invoke-Native $west.Source $westArgs
++            Invoke-Native -Program $west.Source -ArgumentList $westArgs
+         }
+         'generic' {
+             $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+             if (-not $cmake) { throw 'cmake was not found.' }
+-            Invoke-Native $cmake.Source @('-S', $ProjectRoot, '-B', (Join-Path $ProjectRoot $buildDir), '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON')
++            Invoke-Native -Program $cmake.Source -ArgumentList @('-S', $ProjectRoot, '-B', (Join-Path $ProjectRoot $buildDir), '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON')
+         }
+         default { throw "Unsupported project.environment '$environment'." }
+     }

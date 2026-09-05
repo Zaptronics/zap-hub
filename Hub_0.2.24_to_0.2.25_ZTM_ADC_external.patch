@@ -1,0 +1,3317 @@
+diff --git ./CMakeLists.txt ./CMakeLists.txt
+index e13dc09..ee280be 100644
+--- ./CMakeLists.txt
++++ ./CMakeLists.txt
+@@ -75,7 +75,7 @@ include(pico_sdk_import.cmake)
+ 
+ project(Hub C CXX ASM)
+ 
+-set(HUB_FIRMWARE_VERSION "0.2.24")
++set(HUB_FIRMWARE_VERSION "0.2.25")
+ set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+ file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
+ configure_file(
+@@ -135,15 +135,13 @@ add_executable(Hub
+     ztmb/cs_mux.c
+     ztmb/adc.c
+     drivers/ad5282.c
+-    drivers/ad7124.c
+-    drivers/thermocouple.c
+     drivers/l6470.c
+     drivers/tla2518.c
+     drivers/pcal6416.c
+     drivers/mpc4901.c
+-    modules/ztm_adc.c
+     modules/ztm_psu_hv.c
+     ztmb/ztm_pwm_adapter.c
++    ztmb/ztm_adc_adapter.c
+     modules/ztm_psu_tec.c
+     modules/ztm_stepper.c
+     ztmb/cli_wifi.c
+diff --git ./README.md ./README.md
+index 767dc12..d9b89fe 100644
+--- ./README.md
++++ ./README.md
+@@ -238,7 +238,7 @@ No licence file is currently included. Add an explicit licence before distributi
+ 
+ ## Reusable Zaptronics modules
+ 
+-From Hub 0.2.21, ZTM_PWM is consumed from the separate ZapEE C11 library
+-rather than duplicated in the Hub source tree. Hub 0.2.23 describes ZapEE `v0.2.2` in `zap.yml` and generated CMake
+-from the private GitHub repository over SSH. Pass `-ZapEEPath` to `build.ps1` only when deliberately testing a local checkout, or use the equivalent `ZAPEE_SOURCE` override. See
++ZTM_PWM and ZTM_ADC are consumed from the separate ZapEE C11 library rather
++than duplicated in the Hub source tree. Hub 0.2.25 pins ZapEE `v0.4.0` in
++`zap.yml` and generated CMake from the private GitHub repository over SSH. Pass `-ZapEEPath` to `build.ps1` only when deliberately testing a local checkout, or use the equivalent `ZAPEE_SOURCE` override. See
+ `documentation/ZTM_PWM_EXTERNAL_LIBRARY.md`.
+diff --git ./cmake/zap_deps.cmake ./cmake/zap_deps.cmake
+index b32eff4..20d53f7 100644
+--- ./cmake/zap_deps.cmake
++++ ./cmake/zap_deps.cmake
+@@ -19,7 +19,7 @@ else()
+     FetchContent_Declare(
+         zapee
+         GIT_REPOSITORY "git@github.com:Zaptronics/zap-ee.git"
+-        GIT_TAG        "v0.3.0"
++        GIT_TAG        "v0.4.0"
+         GIT_SHALLOW    TRUE
+         GIT_PROGRESS   TRUE
+         SOURCE_DIR     "${ZAP_DEPS_DIR}/zapee"
+@@ -32,5 +32,5 @@ function(zap_apply_dependencies target_name)
+     if(NOT TARGET "${target_name}")
+         message(FATAL_ERROR "zap_apply_dependencies: target '${target_name}' does not exist")
+     endif()
+-    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::ztm_pwm)
++    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::ztm_pwm zap::ztm_adc)
+ endfunction()
+diff --git ./cmds.h ./cmds.h
+index 5293e23..93563ad 100644
+--- ./cmds.h
++++ ./cmds.h
+@@ -10,7 +10,7 @@
+ #include "ztmb/io_exp.h"
+ 
+ #include "modules/ztm_stepper.h"
+-#include "modules/ztm_adc.h"
++#include "ztmb/ztm_adc_adapter.h"
+ #include "cooling.h"
+ #include "pumping.h"
+ #include "modules/ztm_pwm.h"
+@@ -2724,7 +2724,7 @@ static const char *adc_measure_stage_name(ztm_adc_measure_stage_t stage)
+ static void print_adc_last_measurement(void)
+ {
+     ztm_adc_measure_diag_t diag;
+-    if (!ztm_adc_get_last_measurement(&diag)) {
++    if (!ztm_adc_get_last_measurement(&ztm_adc_1, &diag)) {
+         console_printf("  Measurement diagnostics unavailable.\r\n");
+         return;
+     }
+@@ -2769,7 +2769,7 @@ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
+     (void)argc; (void)argv; (void)out; (void)out_len;
+     const ztm_adc_t *module = &ztm_adc_1;
+ 
+-    console_printf("\r\nAD7124 module: %s\r\n", ztm_adc_ready() ? "READY" : "NOT READY");
++    console_printf("\r\nAD7124 module: %s\r\n", ztm_adc_ready(&ztm_adc_1) ? "READY" : "NOT READY");
+     console_printf("  ID: 0x%02X; SPI%u, %lu Hz, mode %u, CS line %u\r\n",
+                    (unsigned)module->device_id,
+                    module->adc.spi_bus.spi == spi0 ? 0u : 1u,
+@@ -2795,19 +2795,19 @@ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
+                    (unsigned long)module->communication_error_count,
+                    (unsigned long)module->last_error_mask);
+ 
+-    if (!ztm_adc_ready()) {
++    if (!ztm_adc_ready(&ztm_adc_1)) {
+         return -1;
+     }
+ 
+     uint32_t adc_control = 0u, tc_config = 0u, rtd_config = 0u;
+     uint32_t tc_filter = 0u, rtd_filter = 0u, io1 = 0u, io2 = 0u;
+-    bool ok = ztm_adc_read_register(AD7124_REG_ADC_CONTROL, 2u, &adc_control) &&
+-              ztm_adc_read_register(AD7124_REG_CONFIG(ZTM_ADC_SETUP_TC), 2u, &tc_config) &&
+-              ztm_adc_read_register(AD7124_REG_CONFIG(ZTM_ADC_SETUP_RTD), 2u, &rtd_config) &&
+-              ztm_adc_read_register(AD7124_REG_FILTER(ZTM_ADC_SETUP_TC), 3u, &tc_filter) &&
+-              ztm_adc_read_register(AD7124_REG_FILTER(ZTM_ADC_SETUP_RTD), 3u, &rtd_filter) &&
+-              ztm_adc_read_register(AD7124_REG_IO_CONTROL_1, 3u, &io1) &&
+-              ztm_adc_read_register(AD7124_REG_IO_CONTROL_2, 2u, &io2);
++    bool ok = ztm_adc_read_register(&ztm_adc_1, AD7124_REG_ADC_CONTROL, 2u, &adc_control) &&
++              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_CONFIG(ZTM_ADC_SETUP_TC), 2u, &tc_config) &&
++              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_CONFIG(ZTM_ADC_SETUP_RTD), 2u, &rtd_config) &&
++              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_FILTER(ZTM_ADC_SETUP_TC), 3u, &tc_filter) &&
++              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_FILTER(ZTM_ADC_SETUP_RTD), 3u, &rtd_filter) &&
++              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_IO_CONTROL_1, 3u, &io1) &&
++              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_IO_CONTROL_2, 2u, &io2);
+     if (ok) {
+         console_printf("  Registers: ADC_CONTROL=0x%04lX TC_CFG=0x%04lX RTD_CFG=0x%04lX\r\n",
+                        (unsigned long)adc_control,
+@@ -2828,7 +2828,7 @@ static int cmd_adc_cjc(int argc, char **argv, char *out, size_t out_len)
+ {
+     (void)argc; (void)argv; (void)out; (void)out_len;
+     ztm_adc_rtd_sample_t sample;
+-    if (!ztm_adc_read_cold_junction(&sample)) {
++    if (!ztm_adc_read_cold_junction(&ztm_adc_1, &sample)) {
+         console_printf("\r\nCold-junction RTD read failed.\r\n");
+         print_adc_last_measurement();
+         return -1;
+@@ -2849,7 +2849,7 @@ static int cmd_adc_rtd(int argc, char **argv, char *out, size_t out_len)
+     if (selector_is_all(argv[2])) {
+         ztm_adc_rtd_sample_t cjc;
+         ztm_adc_rtd_sample_t rtds[ZTM_ADC_RTD_COUNT];
+-        if (!ztm_adc_read_all_rtds(&cjc, rtds)) {
++        if (!ztm_adc_read_all_rtds(&ztm_adc_1, &cjc, rtds)) {
+             console_printf("\r\nRTD scan failed; excitation has been turned off.\r\n");
+             print_adc_last_measurement();
+             return -2;
+@@ -2871,7 +2871,7 @@ static int cmd_adc_rtd(int argc, char **argv, char *out, size_t out_len)
+     }
+ 
+     ztm_adc_rtd_sample_t sample;
+-    if (!ztm_adc_read_rtd((uint8_t)id, &sample)) {
++    if (!ztm_adc_read_rtd(&ztm_adc_1, (uint8_t)id, &sample)) {
+         console_printf("\r\nRTD%lu read failed; excitation has been turned off.\r\n",
+                        (unsigned long)id);
+         print_adc_last_measurement();
+@@ -2888,7 +2888,7 @@ static void print_adc_tc_types(void)
+ {
+     for (uint8_t tc = 1u; tc <= ZTM_ADC_TC_COUNT; tc++) {
+         thermocouple_type_t type;
+-        if (ztm_adc_get_thermocouple_type(tc, &type)) {
++        if (ztm_adc_get_thermocouple_type(&ztm_adc_1, tc, &type)) {
+             console_printf("  TC%u: Type %s\r\n",
+                            (unsigned)tc, thermocouple_type_name(type));
+         } else {
+@@ -2918,7 +2918,7 @@ static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
+             print_adc_tc_types();
+         } else {
+             thermocouple_type_t type;
+-            if (!ztm_adc_get_thermocouple_type((uint8_t)id, &type)) {
++            if (!ztm_adc_get_thermocouple_type(&ztm_adc_1, (uint8_t)id, &type)) {
+                 console_printf("  TC%lu type unavailable.\r\n", (unsigned long)id);
+                 return -3;
+             }
+@@ -2937,7 +2937,7 @@ static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
+ 
+     if (all) {
+         for (uint8_t tc = 1u; tc <= ZTM_ADC_TC_COUNT; tc++) {
+-            if (!ztm_adc_set_thermocouple_type(tc, type)) {
++            if (!ztm_adc_set_thermocouple_type(&ztm_adc_1, tc, type)) {
+                 console_printf("\r\nFailed to set TC%u type.\r\n", (unsigned)tc);
+                 return -5;
+             }
+@@ -2945,7 +2945,7 @@ static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
+         console_printf("\r\nTC1..3 set to Type %s (runtime setting).\r\n",
+                        thermocouple_type_name(type));
+     } else {
+-        if (!ztm_adc_set_thermocouple_type((uint8_t)id, type)) {
++        if (!ztm_adc_set_thermocouple_type(&ztm_adc_1, (uint8_t)id, type)) {
+             console_printf("\r\nFailed to set TC%lu type.\r\n", (unsigned long)id);
+             return -6;
+         }
+@@ -2965,7 +2965,7 @@ static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
+ 
+     if (selector_is_all(argv[2])) {
+         ztm_adc_tc_sample_t samples[ZTM_ADC_TC_COUNT];
+-        if (!ztm_adc_read_all_thermocouples(samples)) {
++        if (!ztm_adc_read_all_thermocouples(&ztm_adc_1, samples)) {
+             console_printf("\r\nThermocouple scan failed.\r\n");
+             print_adc_last_measurement();
+             return -2;
+@@ -2984,7 +2984,7 @@ static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
+     }
+ 
+     ztm_adc_tc_sample_t sample;
+-    if (!ztm_adc_read_thermocouple((uint8_t)id, &sample)) {
++    if (!ztm_adc_read_thermocouple(&ztm_adc_1, (uint8_t)id, &sample)) {
+         console_printf("\r\nTC%lu read failed.\r\n", (unsigned long)id);
+         print_adc_last_measurement();
+         return -4;
+@@ -3000,7 +3000,7 @@ static int cmd_adc_read_all(int argc, char **argv, char *out, size_t out_len)
+     ztm_adc_rtd_sample_t cjc;
+     ztm_adc_rtd_sample_t rtds[ZTM_ADC_RTD_COUNT];
+     ztm_adc_tc_sample_t tcs[ZTM_ADC_TC_COUNT];
+-    if (!ztm_adc_read_all(&cjc, rtds, tcs)) {
++    if (!ztm_adc_read_all(&ztm_adc_1, &cjc, rtds, tcs)) {
+         console_printf("\r\nComplete ADC scan failed; RTD excitation has been turned off.\r\n");
+         print_adc_last_measurement();
+         return -1;
+@@ -3022,7 +3022,7 @@ static int cmd_adc_read_all(int argc, char **argv, char *out, size_t out_len)
+ static int cmd_adc_verify(int argc, char **argv, char *out, size_t out_len)
+ {
+     (void)argc; (void)argv; (void)out; (void)out_len;
+-    bool ok = ztm_adc_verify_configuration();
++    bool ok = ztm_adc_verify_configuration(&ztm_adc_1);
+     console_printf("\r\nAD7124 configuration %s.\r\n",
+                    ok ? "matches the ZTM ADC board map" : "verification FAILED");
+     return ok ? 0 : -1;
+@@ -3033,7 +3033,7 @@ static int cmd_adc_errors(int argc, char **argv, char *out, size_t out_len)
+     (void)argc; (void)argv; (void)out; (void)out_len;
+     uint8_t status = 0u;
+     uint32_t errors = 0u;
+-    if (!ztm_adc_read_error_status(&status, &errors)) {
++    if (!ztm_adc_read_error_status(&ztm_adc_1, &status, &errors)) {
+         console_printf("\r\nAD7124 status/error read failed.\r\n");
+         return -1;
+     }
+@@ -3055,7 +3055,7 @@ static int cmd_adc_reg(int argc, char **argv, char *out, size_t out_len)
+     }
+ 
+     uint32_t value = 0u;
+-    if (!ztm_adc_read_register((uint8_t)address, (uint8_t)width, &value)) {
++    if (!ztm_adc_read_register(&ztm_adc_1, (uint8_t)address, (uint8_t)width, &value)) {
+         console_printf("\r\nAD7124 register read failed. Check address and register width.\r\n");
+         return -2;
+     }
+@@ -3084,11 +3084,11 @@ static int cmd_adc_calibrate(int argc, char **argv, char *out, size_t out_len)
+ 
+     bool ok = false;
+     if (strcmp(argv[2], "tc") == 0) {
+-        ok = ztm_adc_calibrate_tc_setup();
++        ok = ztm_adc_calibrate_tc_setup(&ztm_adc_1);
+     } else if (strcmp(argv[2], "rtd") == 0) {
+-        ok = ztm_adc_calibrate_rtd_setup();
++        ok = ztm_adc_calibrate_rtd_setup(&ztm_adc_1);
+     } else if (strcmp(argv[2], "all") == 0) {
+-        ok = ztm_adc_calibrate_all();
++        ok = ztm_adc_calibrate_all(&ztm_adc_1);
+     } else {
+         console_printf("\r\nUsage: adc calibrate <tc|rtd|all>\r\n");
+         return -2;
+@@ -3102,7 +3102,7 @@ static int cmd_adc_calibrate(int argc, char **argv, char *out, size_t out_len)
+ static int cmd_adc_iout_off(int argc, char **argv, char *out, size_t out_len)
+ {
+     (void)argc; (void)argv; (void)out; (void)out_len;
+-    bool ok = ztm_adc_iout_off();
++    bool ok = ztm_adc_iout_off(&ztm_adc_1);
+     console_printf("\r\n%s\r\n", ok ? "AD7124 excitation currents are off"
+                                       : "Failed to disable AD7124 excitation currents");
+     return ok ? 0 : -1;
+@@ -3151,7 +3151,7 @@ static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
+     hv_ok = hv_enable_read && !hv_enabled;
+ 
+     bool pwm_ok = !modules_find_by_short_name("ztm_pwm") || ztm_pwm_stop_all(&ztm_pwm_1);
+-    bool adc_ok = !ztm_adc_ready() || ztm_adc_iout_off();
++    bool adc_ok = !ztm_adc_ready(&ztm_adc_1) || ztm_adc_iout_off(&ztm_adc_1);
+ 
+     console_printf("  steppers: %s\r\n", stepper_ok ? "HiZ/not fitted" : "FAILED");
+     console_printf("  TECs:     %s\r\n", tec_ok ? "disabled/not fitted" : "FAILED");
+diff --git ./documentation/ZAPEE_LIBRARY.md ./documentation/ZAPEE_LIBRARY.md
+index 2134dfd..a10aa5a 100644
+--- ./documentation/ZAPEE_LIBRARY.md
++++ ./documentation/ZAPEE_LIBRARY.md
+@@ -19,7 +19,7 @@ generates their ordinary configuration.
+ 
+ ## Hub `zap.yml`
+ 
+-Hub 0.2.23 uses:
++Hub 0.2.25 uses:
+ 
+ ```yaml
+ schema: 1
+@@ -36,7 +36,7 @@ dependencies:
+   zapee:
+     type: git
+     uri: git@github.com:Zaptronics/zap-ee.git
+-    version: v0.2.2
++    version: v0.4.0
+     override_var: ZAPEE_SOURCE
+     zephyr_module: true
+     components:
+@@ -94,7 +94,7 @@ absolute. `deps/` is ignored by Git.
+ .\zap generate
+ .\zap check
+ .\zap list
+-.\zap version zapee v0.2.2
++.\zap version zapee v0.4.0
+ .\zap add zapee zap::ztm_pwm
+ .\zap remove zapee zap::ztm_pwm
+ .\zap adapter stm32
+@@ -135,7 +135,7 @@ include(FetchContent)
+ FetchContent_Declare(
+     zapee
+     GIT_REPOSITORY git@github.com:Zaptronics/zap-ee.git
+-    GIT_TAG        v0.2.2
++    GIT_TAG        v0.4.0
+     SOURCE_DIR     "${CMAKE_SOURCE_DIR}/deps/zapee"
+     BINARY_DIR     "${CMAKE_BINARY_DIR}/_zapdeps/zapee"
+ )
+@@ -177,3 +177,9 @@ and EMC2303 dependencies are authoritative in ZapEE. For each future migration:
+ 6. test the Hub against the external code;
+ 7. delete the old Hub copy only after hardware validation;
+ 8. tag ZapEE and update the pinned ref.
++
++## ZTM_ADC migration
++
++Hub 0.2.25 also consumes `zap::ztm_adc`. The AD7124-8 driver, NIST thermocouple conversion code and ZTM_ADC board logic now live only in ZapEE. The Hub keeps only `ztmb/ztm_adc_adapter.c`, which maps the motherboard SPI chip-select fabric, shared-bus locking, timing and logging onto ZapEE's portable SPI/time/operation-lock/event contracts.
++
++This is the reference pattern for future SPI-based ZapLink modules: keep board-independent silicon/module logic in ZapEE and keep only host/motherboard policy in the firmware repository.
+diff --git ./documentation/ZTM_ADC_EXTERNAL_LIBRARY.md ./documentation/ZTM_ADC_EXTERNAL_LIBRARY.md
+new file mode 100644
+index 0000000..69c6067
+--- /dev/null
++++ ./documentation/ZTM_ADC_EXTERNAL_LIBRARY.md
+@@ -0,0 +1,44 @@
++# ZTM_ADC external ZapEE library
++
++From Hub 0.2.25, ZTM_ADC is consumed from ZapEE `v0.4.0` as `zap::ztm_adc`.
++The Hub no longer owns production copies of the AD7124 driver, thermocouple
++conversion library, or ZTM_ADC module implementation.
++
++## Dependency split
++
++```text
++Hub application / CLI
++        |
++ztmb/ztm_adc_adapter.c
++        |
++        +-- Hub ztmb/bus SPI + CS decoder
++        +-- Hub mutex/timing/logging
++        |
++        `-- zap::ztm_adc
++              +-- zap::ad7124
++              |     `-- zap::spi
++              `-- zap::thermocouple
++```
++
++The Hub still exposes the convenient `ztm_adc_1` singleton, but that singleton
++belongs to the Hub adapter. ZapEE itself is explicit-instance and has no hidden
++global module state.
++
++## Portable boundary
++
++ZapEE's AD7124 driver receives a `zap_spi_device_t`. A register read is modeled
++as `begin -> command transfer -> response transfer -> end`, which lets the Hub
++keep its motherboard CS decoder selected across the complete transaction.
++ZTM_ADC additionally receives high-resolution `zap_time_t`, an optional
++operation-level `zap_lock_t`, and a structured event callback.
++
++The Hub maps structured reset/error/configuration events back to its existing
++logging behavior; another customer may map the same events to an RTOS queue,
++CAN alarm, telemetry record, or ignore them.
++
++## Development and releases
++
++`zap.yml` pins ZapEE `v0.4.0`. `./zap` synchronizes the tagged dependency into
++`deps/zapee` and refreshes CMake/IDE metadata. For active library development,
++use the explicit local `ZAPEE_SOURCE` / `-ZapEEPath` override rather than editing
++the production tag.
+diff --git ./documentation/ZTM_PWM_EXTERNAL_LIBRARY.md ./documentation/ZTM_PWM_EXTERNAL_LIBRARY.md
+index bf34ea7..5f93025 100644
+--- ./documentation/ZTM_PWM_EXTERNAL_LIBRARY.md
++++ ./documentation/ZTM_PWM_EXTERNAL_LIBRARY.md
+@@ -6,8 +6,8 @@ ZapEE library and are linked as the CMake target `zap::ztm_pwm`.
+ 
+ ## Dependency selection
+ 
+-Hub 0.2.23 describes the private GitHub dependency in `zap.yml` and pins the exact ZapEE
+-release `v0.2.2` over SSH:
++Hub 0.2.25 describes the private GitHub dependency in `zap.yml` and pins the exact ZapEE
++release `v0.4.0` over SSH:
+ 
+ ```text
+ git@github.com:Zaptronics/zap-ee.git
+@@ -60,7 +60,7 @@ at a local checkout, but before a Hub release the corresponding ZapEE changes
+ are committed, tagged, pushed, and the Hub manifest is advanced with, for example:
+ 
+ ```powershell
+-.\zap version zapee v0.2.2
++.\zap version zapee v0.4.0
+ ```
+ 
+ The generated CMake then continues to link the same `zap::ztm_pwm` target.
+diff --git ./drivers/ad7124.c ./drivers/ad7124.c
+deleted file mode 100644
+index 5dccc64..0000000
+--- ./drivers/ad7124.c
++++ /dev/null
+@@ -1,493 +0,0 @@
+-#include <string.h>
+-
+-#include "pico/stdlib.h"
+-
+-#include "drivers/ad7124.h"
+-
+-#define AD7124_RESET_BYTES 8u
+-#define AD7124_RESET_SETTLE_US 1000u
+-
+-static uint8_t ad7124_build_comm(ad7124_reg_t reg, bool read)
+-{
+-    return (uint8_t)((read ? (1u << 6) : 0u) | ((uint8_t)reg & 0x3Fu));
+-}
+-
+-static bool ad7124_write_bytes(ad7124_dev_t *dev,
+-                               ad7124_reg_t reg,
+-                               const uint8_t *data,
+-                               size_t length)
+-{
+-    if (!dev || (!data && length != 0u) || length > 4u) {
+-        return false;
+-    }
+-
+-    uint8_t frame[5] = { ad7124_build_comm(reg, false), 0u, 0u, 0u, 0u };
+-    if (length != 0u) {
+-        memcpy(&frame[1], data, length);
+-    }
+-    return bus_spi_write(&dev->spi_bus, frame, length + 1u);
+-}
+-
+-static bool ad7124_read_bytes(ad7124_dev_t *dev,
+-                              ad7124_reg_t reg,
+-                              uint8_t *data,
+-                              size_t length)
+-{
+-    if (!dev || !data || length == 0u || length > 4u) {
+-        return false;
+-    }
+-
+-    uint8_t command = ad7124_build_comm(reg, true);
+-    if (!bus_spi_begin(&dev->spi_bus)) {
+-        return false;
+-    }
+-
+-    bool ok = bus_spi_transfer(&dev->spi_bus, &command, NULL, 1u);
+-    if (ok) {
+-        ok = bus_spi_transfer(&dev->spi_bus, NULL, data, length);
+-    }
+-    bool ended = bus_spi_end(&dev->spi_bus);
+-    return ok && ended;
+-}
+-
+-void ad7124_init(ad7124_dev_t *dev)
+-{
+-    if (!dev) {
+-        return;
+-    }
+-    dev->data_status_enabled = false;
+-    dev->power_mode = AD7124_POWER_LOW;
+-    dev->mode = AD7124_MODE_CONTINUOUS;
+-}
+-
+-bool ad7124_reset(ad7124_dev_t *dev)
+-{
+-    if (!dev) {
+-        return false;
+-    }
+-
+-    uint8_t ones[AD7124_RESET_BYTES];
+-    memset(ones, 0xFF, sizeof(ones));
+-    if (!bus_spi_write(&dev->spi_bus, ones, sizeof(ones))) {
+-        return false;
+-    }
+-
+-    /* Register access is ignored while the power-on/reset sequence completes. */
+-    busy_wait_us(AD7124_RESET_SETTLE_US);
+-    dev->data_status_enabled = false;
+-    dev->power_mode = AD7124_POWER_LOW;
+-    dev->mode = AD7124_MODE_CONTINUOUS;
+-    return true;
+-}
+-
+-bool ad7124_read_id(ad7124_dev_t *dev, uint8_t *id_out)
+-{
+-    return id_out && ad7124_read_reg8(dev, AD7124_REG_ID, id_out);
+-}
+-
+-bool ad7124_id_is_ad7124_8(uint8_t id)
+-{
+-    /* DEVICE_ID occupies the high nibble; the low nibble is silicon revision. */
+-    return (id & 0xF0u) == 0x10u;
+-}
+-
+-bool ad7124_read_reg8(ad7124_dev_t *dev, ad7124_reg_t reg, uint8_t *value)
+-{
+-    return value && ad7124_read_bytes(dev, reg, value, 1u);
+-}
+-
+-bool ad7124_read_reg16(ad7124_dev_t *dev, ad7124_reg_t reg, uint16_t *value)
+-{
+-    if (!value) {
+-        return false;
+-    }
+-    uint8_t bytes[2];
+-    if (!ad7124_read_bytes(dev, reg, bytes, sizeof(bytes))) {
+-        return false;
+-    }
+-    *value = (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
+-    return true;
+-}
+-
+-bool ad7124_read_reg24(ad7124_dev_t *dev, ad7124_reg_t reg, uint32_t *value)
+-{
+-    if (!value) {
+-        return false;
+-    }
+-    uint8_t bytes[3];
+-    if (!ad7124_read_bytes(dev, reg, bytes, sizeof(bytes))) {
+-        return false;
+-    }
+-    *value = ((uint32_t)bytes[0] << 16) |
+-             ((uint32_t)bytes[1] << 8) |
+-             (uint32_t)bytes[2];
+-    return true;
+-}
+-
+-bool ad7124_write_reg8(ad7124_dev_t *dev, ad7124_reg_t reg, uint8_t value)
+-{
+-    return ad7124_write_bytes(dev, reg, &value, 1u);
+-}
+-
+-bool ad7124_write_reg16(ad7124_dev_t *dev, ad7124_reg_t reg, uint16_t value)
+-{
+-    uint8_t bytes[2] = { (uint8_t)(value >> 8), (uint8_t)value };
+-    return ad7124_write_bytes(dev, reg, bytes, sizeof(bytes));
+-}
+-
+-bool ad7124_write_reg24(ad7124_dev_t *dev, ad7124_reg_t reg, uint32_t value)
+-{
+-    uint8_t bytes[3] = {
+-        (uint8_t)(value >> 16),
+-        (uint8_t)(value >> 8),
+-        (uint8_t)value
+-    };
+-    return ad7124_write_bytes(dev, reg, bytes, sizeof(bytes));
+-}
+-
+-bool ad7124_read_status(ad7124_dev_t *dev, uint8_t *status)
+-{
+-    return ad7124_read_reg8(dev, AD7124_REG_STATUS, status);
+-}
+-
+-bool ad7124_read_error(ad7124_dev_t *dev, uint32_t *error)
+-{
+-    return ad7124_read_reg24(dev, AD7124_REG_ERROR, error);
+-}
+-
+-bool ad7124_config_error_enable(ad7124_dev_t *dev, uint32_t mask)
+-{
+-    return ad7124_write_reg24(dev, AD7124_REG_ERROR_EN, mask & 0x7FFFFFu);
+-}
+-
+-bool ad7124_config_adc_control(ad7124_dev_t *dev,
+-                               ad7124_power_mode_t power,
+-                               ad7124_operating_mode_t mode,
+-                               bool data_status,
+-                               bool internal_reference_enable,
+-                               bool cs_enable)
+-{
+-    if (!dev || power > AD7124_POWER_FULL || mode > AD7124_MODE_SYS_FULL_CAL) {
+-        return false;
+-    }
+-
+-    uint16_t value = 0u;
+-    if (data_status) {
+-        value |= (1u << 10);
+-    }
+-    if (cs_enable) {
+-        value |= (1u << 9);
+-    }
+-    if (internal_reference_enable) {
+-        value |= (1u << 8);
+-    }
+-    value |= (uint16_t)((uint16_t)power << 6);
+-    value |= (uint16_t)((uint16_t)mode << 2);
+-
+-    if (!ad7124_write_reg16(dev, AD7124_REG_ADC_CONTROL, value)) {
+-        return false;
+-    }
+-
+-    dev->data_status_enabled = data_status;
+-    dev->power_mode = power;
+-    dev->mode = mode;
+-    return true;
+-}
+-
+-bool ad7124_set_mode(ad7124_dev_t *dev, ad7124_operating_mode_t mode)
+-{
+-    if (!dev || mode > AD7124_MODE_SYS_FULL_CAL) {
+-        return false;
+-    }
+-
+-    uint16_t control = 0u;
+-    if (!ad7124_read_reg16(dev, AD7124_REG_ADC_CONTROL, &control)) {
+-        return false;
+-    }
+-    control &= (uint16_t)~(0x0Fu << 2);
+-    control |= (uint16_t)((uint16_t)mode << 2);
+-    if (!ad7124_write_reg16(dev, AD7124_REG_ADC_CONTROL, control)) {
+-        return false;
+-    }
+-    dev->mode = mode;
+-    return true;
+-}
+-
+-bool ad7124_config_setup(ad7124_dev_t *dev,
+-                         uint8_t setup,
+-                         ad7124_ref_sel_t reference,
+-                         bool bipolar,
+-                         ad7124_pga_t pga,
+-                         bool ain_buffer_positive,
+-                         bool ain_buffer_negative,
+-                         bool ref_buffer_positive,
+-                         bool ref_buffer_negative,
+-                         uint8_t burnout)
+-{
+-    if (!dev || setup >= AD7124_SETUP_COUNT || reference > AD7124_REF_AVDD ||
+-        pga > AD7124_PGA_128 || burnout > 3u) {
+-        return false;
+-    }
+-
+-    uint16_t value = 0u;
+-    value |= bipolar ? (1u << 11) : 0u;
+-    value |= (uint16_t)((uint16_t)burnout << 9);
+-    value |= ref_buffer_positive ? (1u << 8) : 0u;
+-    value |= ref_buffer_negative ? (1u << 7) : 0u;
+-    value |= ain_buffer_positive ? (1u << 6) : 0u;
+-    value |= ain_buffer_negative ? (1u << 5) : 0u;
+-    value |= (uint16_t)((uint16_t)reference << 3);
+-    value |= (uint16_t)pga;
+-    return ad7124_write_reg16(dev, AD7124_REG_CONFIG(setup), value);
+-}
+-
+-bool ad7124_config_filter(ad7124_dev_t *dev,
+-                          uint8_t setup,
+-                          ad7124_filter_type_t filter,
+-                          uint8_t post_filter,
+-                          bool reject_60hz,
+-                          bool single_cycle,
+-                          uint16_t fs)
+-{
+-    if (!dev || setup >= AD7124_SETUP_COUNT || post_filter > 7u ||
+-        fs == 0u || fs > 2047u) {
+-        return false;
+-    }
+-
+-    uint32_t value = ((uint32_t)filter << 21) |
+-                     (reject_60hz ? (1u << 20) : 0u) |
+-                     ((uint32_t)post_filter << 17) |
+-                     (single_cycle ? (1u << 16) : 0u) |
+-                     (uint32_t)fs;
+-    return ad7124_write_reg24(dev, AD7124_REG_FILTER(setup), value);
+-}
+-
+-bool ad7124_config_channel(ad7124_dev_t *dev,
+-                           uint8_t channel,
+-                           bool enable,
+-                           uint8_t setup,
+-                           uint8_t ain_positive,
+-                           uint8_t ain_negative)
+-{
+-    if (!dev || channel >= AD7124_CHANNEL_COUNT || setup >= AD7124_SETUP_COUNT ||
+-        ain_positive > 31u || ain_negative > 31u) {
+-        return false;
+-    }
+-
+-    uint16_t value = enable ? (1u << 15) : 0u;
+-    value |= (uint16_t)((uint16_t)setup << 12);
+-    value |= (uint16_t)((uint16_t)ain_positive << 5);
+-    value |= (uint16_t)ain_negative;
+-    return ad7124_write_reg16(dev, AD7124_REG_CHANNEL(channel), value);
+-}
+-
+-bool ad7124_set_channel_enabled(ad7124_dev_t *dev, uint8_t channel, bool enable)
+-{
+-    if (!dev || channel >= AD7124_CHANNEL_COUNT) {
+-        return false;
+-    }
+-
+-    uint16_t value = 0u;
+-    if (!ad7124_read_reg16(dev, AD7124_REG_CHANNEL(channel), &value)) {
+-        return false;
+-    }
+-    if (enable) {
+-        value |= (1u << 15);
+-    } else {
+-        value &= (uint16_t)~(1u << 15);
+-    }
+-    return ad7124_write_reg16(dev, AD7124_REG_CHANNEL(channel), value);
+-}
+-
+-bool ad7124_disable_all_channels(ad7124_dev_t *dev)
+-{
+-    if (!dev) {
+-        return false;
+-    }
+-
+-    for (uint8_t channel = 0u; channel < AD7124_CHANNEL_COUNT; channel++) {
+-        if (!ad7124_set_channel_enabled(dev, channel, false)) {
+-            return false;
+-        }
+-    }
+-    return true;
+-}
+-
+-bool ad7124_set_iout(ad7124_dev_t *dev,
+-                     ad7124_iout_val_t iout0,
+-                     uint8_t iout0_ain,
+-                     ad7124_iout_val_t iout1,
+-                     uint8_t iout1_ain,
+-                     bool close_power_switch)
+-{
+-    if (!dev || iout0 > AD7124_IOUT_0_1UA || iout1 > AD7124_IOUT_0_1UA ||
+-        iout0_ain > 15u || iout1_ain > 15u) {
+-        return false;
+-    }
+-
+-    uint32_t value = close_power_switch ? (1u << 15) : 0u;
+-    value |= (uint32_t)iout1 << 11;
+-    value |= (uint32_t)iout0 << 8;
+-    value |= (uint32_t)iout1_ain << 4;
+-    value |= (uint32_t)iout0_ain;
+-    return ad7124_write_reg24(dev, AD7124_REG_IO_CONTROL_1, value);
+-}
+-
+-bool ad7124_disable_iouts(ad7124_dev_t *dev)
+-{
+-    return ad7124_set_iout(dev,
+-                           AD7124_IOUT_OFF, 0u,
+-                           AD7124_IOUT_OFF, 0u,
+-                           false);
+-}
+-
+-bool ad7124_set_bias_mask(ad7124_dev_t *dev, uint16_t ain_mask)
+-{
+-    return ad7124_write_reg16(dev, AD7124_REG_IO_CONTROL_2, ain_mask);
+-}
+-
+-bool ad7124_wait_ready(ad7124_dev_t *dev, uint32_t timeout_us)
+-{
+-    if (!dev || timeout_us == 0u) {
+-        return false;
+-    }
+-
+-    absolute_time_t deadline = make_timeout_time_us(timeout_us);
+-    do {
+-        uint8_t status = 0u;
+-        if (!ad7124_read_status(dev, &status)) {
+-            return false;
+-        }
+-        if ((status & AD7124_STATUS_RDY) == 0u) {
+-            return true;
+-        }
+-        tight_loop_contents();
+-    } while (!time_reached(deadline));
+-
+-    return false;
+-}
+-
+-bool ad7124_read_sample(ad7124_dev_t *dev, uint32_t *code, uint8_t *channel_active)
+-{
+-    if (!dev || !code) {
+-        return false;
+-    }
+-
+-    if (dev->data_status_enabled) {
+-        uint8_t command = ad7124_build_comm(AD7124_REG_DATA, true);
+-        uint8_t response[4] = { 0u, 0u, 0u, 0u };
+-        if (!bus_spi_begin(&dev->spi_bus)) {
+-            return false;
+-        }
+-        bool ok = bus_spi_transfer(&dev->spi_bus, &command, NULL, 1u);
+-        if (ok) {
+-            ok = bus_spi_transfer(&dev->spi_bus, NULL, response, sizeof(response));
+-        }
+-        bool ended = bus_spi_end(&dev->spi_bus);
+-        if (!ok || !ended) {
+-            return false;
+-        }
+-
+-        *code = ((uint32_t)response[0] << 16) |
+-                ((uint32_t)response[1] << 8) |
+-                response[2];
+-        if (channel_active) {
+-            *channel_active = response[3] & AD7124_STATUS_CHANNEL_MASK;
+-        }
+-        return true;
+-    }
+-
+-    if (!ad7124_read_reg24(dev, AD7124_REG_DATA, code)) {
+-        return false;
+-    }
+-    if (channel_active) {
+-        uint8_t status = 0u;
+-        if (!ad7124_read_status(dev, &status)) {
+-            return false;
+-        }
+-        *channel_active = status & AD7124_STATUS_CHANNEL_MASK;
+-    }
+-    return true;
+-}
+-
+-bool ad7124_single_conversion(ad7124_dev_t *dev,
+-                              uint8_t channel,
+-                              uint32_t timeout_us,
+-                              uint32_t *code,
+-                              uint8_t *channel_active)
+-{
+-    if (!dev || !code || channel >= AD7124_CHANNEL_COUNT) {
+-        return false;
+-    }
+-
+-    if (!ad7124_disable_all_channels(dev) ||
+-        !ad7124_set_channel_enabled(dev, channel, true) ||
+-        !ad7124_set_mode(dev, AD7124_MODE_SINGLE) ||
+-        !ad7124_wait_ready(dev, timeout_us)) {
+-        (void)ad7124_set_mode(dev, AD7124_MODE_STANDBY);
+-        return false;
+-    }
+-
+-    uint8_t active = 0xFFu;
+-    bool ok = ad7124_read_sample(dev, code, &active);
+-    if (ok && dev->data_status_enabled && active != channel) {
+-        ok = false;
+-    }
+-    if (channel_active) {
+-        *channel_active = active;
+-    }
+-    (void)ad7124_set_mode(dev, AD7124_MODE_STANDBY);
+-    return ok;
+-}
+-
+-bool ad7124_calibrate_channel(ad7124_dev_t *dev,
+-                              uint8_t channel,
+-                              bool zero_scale,
+-                              bool full_scale,
+-                              uint32_t timeout_us)
+-{
+-    if (!dev || channel >= AD7124_CHANNEL_COUNT || (!zero_scale && !full_scale)) {
+-        return false;
+-    }
+-
+-    if (!ad7124_disable_all_channels(dev) ||
+-        !ad7124_set_channel_enabled(dev, channel, true)) {
+-        return false;
+-    }
+-
+-    bool ok = true;
+-    if (zero_scale) {
+-        ok = ad7124_set_mode(dev, AD7124_MODE_INT_ZERO_CAL) &&
+-             ad7124_wait_ready(dev, timeout_us);
+-    }
+-    if (ok && full_scale) {
+-        ok = ad7124_set_mode(dev, AD7124_MODE_INT_FULL_CAL) &&
+-             ad7124_wait_ready(dev, timeout_us);
+-    }
+-    (void)ad7124_set_mode(dev, AD7124_MODE_STANDBY);
+-    return ok;
+-}
+-
+-uint8_t ad7124_pga_gain(ad7124_pga_t pga)
+-{
+-    if (pga > AD7124_PGA_128) {
+-        return 1u;
+-    }
+-    return (uint8_t)(1u << (uint8_t)pga);
+-}
+-
+-double ad7124_code_to_bipolar_voltage(uint32_t code,
+-                                      double reference_volts,
+-                                      ad7124_pga_t pga)
+-{
+-    double normalized = ((double)(code & AD7124_DATA_FULL_SCALE) /
+-                         (double)AD7124_DATA_MIDSCALE) - 1.0;
+-    return normalized * reference_volts / (double)ad7124_pga_gain(pga);
+-}
+-
+-double ad7124_code_to_unipolar_ratio(uint32_t code, ad7124_pga_t pga)
+-{
+-    return ((double)(code & AD7124_DATA_FULL_SCALE) /
+-            (double)AD7124_DATA_CODE_COUNT) /
+-           (double)ad7124_pga_gain(pga);
+-}
+diff --git ./drivers/ad7124.h ./drivers/ad7124.h
+deleted file mode 100644
+index b489fa6..0000000
+--- ./drivers/ad7124.h
++++ /dev/null
+@@ -1,233 +0,0 @@
+-#pragma once
+-
+-#include <stdbool.h>
+-#include <stddef.h>
+-#include <stdint.h>
+-
+-#include "ztmb/bus.h"
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-#define AD7124_CHANNEL_COUNT          16u
+-#define AD7124_SETUP_COUNT             8u
+-#define AD7124_DATA_FULL_SCALE  0xFFFFFFu
+-#define AD7124_DATA_CODE_COUNT 0x1000000u
+-#define AD7124_DATA_MIDSCALE    0x800000u
+-
+-/* Status register bits. */
+-#define AD7124_STATUS_RDY              (1u << 7)
+-#define AD7124_STATUS_ERROR_FLAG       (1u << 6)
+-#define AD7124_STATUS_POR_FLAG         (1u << 4)
+-#define AD7124_STATUS_CHANNEL_MASK      0x0Fu
+-
+-/* ERROR / ERROR_EN register masks. */
+-#define AD7124_ERROR_LDO_CAP           (1u << 19)
+-#define AD7124_ERROR_ADC_CAL           (1u << 18)
+-#define AD7124_ERROR_ADC_CONV          (1u << 17)
+-#define AD7124_ERROR_ADC_SAT           (1u << 16)
+-#define AD7124_ERROR_AINP_OV           (1u << 15)
+-#define AD7124_ERROR_AINP_UV           (1u << 14)
+-#define AD7124_ERROR_AINM_OV           (1u << 13)
+-#define AD7124_ERROR_AINM_UV           (1u << 12)
+-#define AD7124_ERROR_REF_DET           (1u << 11)
+-#define AD7124_ERROR_DLDO_PSM          (1u << 9)
+-#define AD7124_ERROR_ALDO_PSM          (1u << 7)
+-#define AD7124_ERROR_SPI_IGNORE        (1u << 6)
+-#define AD7124_ERROR_SPI_SCLK_CNT      (1u << 5)
+-#define AD7124_ERROR_SPI_READ          (1u << 4)
+-#define AD7124_ERROR_SPI_WRITE         (1u << 3)
+-#define AD7124_ERROR_SPI_CRC           (1u << 2)
+-#define AD7124_ERROR_MM_CRC            (1u << 1)
+-#define AD7124_ERROR_ROM_CRC           (1u << 0)
+-
+-/* Register addresses. */
+-typedef enum {
+-    AD7124_REG_STATUS        = 0x00,
+-    AD7124_REG_ADC_CONTROL   = 0x01,
+-    AD7124_REG_DATA          = 0x02,
+-    AD7124_REG_IO_CONTROL_1  = 0x03,
+-    AD7124_REG_IO_CONTROL_2  = 0x04,
+-    AD7124_REG_ID            = 0x05,
+-    AD7124_REG_ERROR         = 0x06,
+-    AD7124_REG_ERROR_EN      = 0x07,
+-    AD7124_REG_MCLK_COUNT    = 0x08,
+-    AD7124_REG_CHANNEL_0     = 0x09,
+-    AD7124_REG_CONFIG_0      = 0x19,
+-    AD7124_REG_FILTER_0      = 0x21,
+-    AD7124_REG_OFFSET_0      = 0x29,
+-    AD7124_REG_GAIN_0        = 0x31
+-} ad7124_reg_t;
+-
+-static inline ad7124_reg_t AD7124_REG_CHANNEL(uint8_t channel)
+-{
+-    return (ad7124_reg_t)(AD7124_REG_CHANNEL_0 + channel);
+-}
+-
+-static inline ad7124_reg_t AD7124_REG_CONFIG(uint8_t setup)
+-{
+-    return (ad7124_reg_t)(AD7124_REG_CONFIG_0 + setup);
+-}
+-
+-static inline ad7124_reg_t AD7124_REG_FILTER(uint8_t setup)
+-{
+-    return (ad7124_reg_t)(AD7124_REG_FILTER_0 + setup);
+-}
+-
+-static inline ad7124_reg_t AD7124_REG_OFFSET(uint8_t setup)
+-{
+-    return (ad7124_reg_t)(AD7124_REG_OFFSET_0 + setup);
+-}
+-
+-static inline ad7124_reg_t AD7124_REG_GAIN(uint8_t setup)
+-{
+-    return (ad7124_reg_t)(AD7124_REG_GAIN_0 + setup);
+-}
+-
+-typedef enum {
+-    AD7124_POWER_LOW  = 0,
+-    AD7124_POWER_MID  = 1,
+-    AD7124_POWER_FULL = 2
+-} ad7124_power_mode_t;
+-
+-typedef enum {
+-    AD7124_MODE_CONTINUOUS       = 0x0,
+-    AD7124_MODE_SINGLE           = 0x1,
+-    AD7124_MODE_STANDBY          = 0x2,
+-    AD7124_MODE_POWERDOWN        = 0x3,
+-    AD7124_MODE_IDLE             = 0x4,
+-    AD7124_MODE_INT_ZERO_CAL     = 0x5,
+-    AD7124_MODE_INT_FULL_CAL     = 0x6,
+-    AD7124_MODE_SYS_ZERO_CAL     = 0x7,
+-    AD7124_MODE_SYS_FULL_CAL     = 0x8
+-} ad7124_operating_mode_t;
+-
+-typedef enum {
+-    AD7124_REF_REFIN1   = 0,
+-    AD7124_REF_REFIN2   = 1,
+-    AD7124_REF_INTERNAL = 2,
+-    AD7124_REF_AVDD     = 3
+-} ad7124_ref_sel_t;
+-
+-typedef enum {
+-    AD7124_PGA_1   = 0,
+-    AD7124_PGA_2   = 1,
+-    AD7124_PGA_4   = 2,
+-    AD7124_PGA_8   = 3,
+-    AD7124_PGA_16  = 4,
+-    AD7124_PGA_32  = 5,
+-    AD7124_PGA_64  = 6,
+-    AD7124_PGA_128 = 7
+-} ad7124_pga_t;
+-
+-typedef enum {
+-    AD7124_FILTER_SINC4      = 0,
+-    AD7124_FILTER_SINC3      = 2,
+-    AD7124_FILTER_FAST_SINC4 = 4,
+-    AD7124_FILTER_FAST_SINC3 = 5,
+-    AD7124_FILTER_POST       = 7
+-} ad7124_filter_type_t;
+-
+-typedef enum {
+-    AD7124_IOUT_OFF    = 0,
+-    AD7124_IOUT_50UA   = 1,
+-    AD7124_IOUT_100UA  = 2,
+-    AD7124_IOUT_250UA  = 3,
+-    AD7124_IOUT_500UA  = 4,
+-    AD7124_IOUT_750UA  = 5,
+-    AD7124_IOUT_1000UA = 6,
+-    AD7124_IOUT_0_1UA  = 7
+-} ad7124_iout_val_t;
+-
+-typedef struct {
+-    bus_spi_t spi_bus;
+-    bool data_status_enabled;
+-    ad7124_power_mode_t power_mode;
+-    ad7124_operating_mode_t mode;
+-} ad7124_dev_t;
+-
+-void ad7124_init(ad7124_dev_t *dev);
+-
+-bool ad7124_reset(ad7124_dev_t *dev);
+-bool ad7124_read_id(ad7124_dev_t *dev, uint8_t *id_out);
+-bool ad7124_id_is_ad7124_8(uint8_t id);
+-
+-bool ad7124_read_reg8(ad7124_dev_t *dev, ad7124_reg_t reg, uint8_t *value);
+-bool ad7124_read_reg16(ad7124_dev_t *dev, ad7124_reg_t reg, uint16_t *value);
+-bool ad7124_read_reg24(ad7124_dev_t *dev, ad7124_reg_t reg, uint32_t *value);
+-bool ad7124_write_reg8(ad7124_dev_t *dev, ad7124_reg_t reg, uint8_t value);
+-bool ad7124_write_reg16(ad7124_dev_t *dev, ad7124_reg_t reg, uint16_t value);
+-bool ad7124_write_reg24(ad7124_dev_t *dev, ad7124_reg_t reg, uint32_t value);
+-
+-bool ad7124_read_status(ad7124_dev_t *dev, uint8_t *status);
+-bool ad7124_read_error(ad7124_dev_t *dev, uint32_t *error);
+-bool ad7124_config_error_enable(ad7124_dev_t *dev, uint32_t mask);
+-
+-bool ad7124_config_adc_control(ad7124_dev_t *dev,
+-                               ad7124_power_mode_t power,
+-                               ad7124_operating_mode_t mode,
+-                               bool data_status,
+-                               bool internal_reference_enable,
+-                               bool cs_enable);
+-bool ad7124_set_mode(ad7124_dev_t *dev, ad7124_operating_mode_t mode);
+-
+-bool ad7124_config_setup(ad7124_dev_t *dev,
+-                         uint8_t setup,
+-                         ad7124_ref_sel_t reference,
+-                         bool bipolar,
+-                         ad7124_pga_t pga,
+-                         bool ain_buffer_positive,
+-                         bool ain_buffer_negative,
+-                         bool ref_buffer_positive,
+-                         bool ref_buffer_negative,
+-                         uint8_t burnout);
+-
+-bool ad7124_config_filter(ad7124_dev_t *dev,
+-                          uint8_t setup,
+-                          ad7124_filter_type_t filter,
+-                          uint8_t post_filter,
+-                          bool reject_60hz,
+-                          bool single_cycle,
+-                          uint16_t fs);
+-
+-bool ad7124_config_channel(ad7124_dev_t *dev,
+-                           uint8_t channel,
+-                           bool enable,
+-                           uint8_t setup,
+-                           uint8_t ain_positive,
+-                           uint8_t ain_negative);
+-bool ad7124_set_channel_enabled(ad7124_dev_t *dev, uint8_t channel, bool enable);
+-bool ad7124_disable_all_channels(ad7124_dev_t *dev);
+-
+-bool ad7124_set_iout(ad7124_dev_t *dev,
+-                     ad7124_iout_val_t iout0,
+-                     uint8_t iout0_ain,
+-                     ad7124_iout_val_t iout1,
+-                     uint8_t iout1_ain,
+-                     bool close_power_switch);
+-bool ad7124_disable_iouts(ad7124_dev_t *dev);
+-bool ad7124_set_bias_mask(ad7124_dev_t *dev, uint16_t ain_mask);
+-
+-bool ad7124_wait_ready(ad7124_dev_t *dev, uint32_t timeout_us);
+-bool ad7124_read_sample(ad7124_dev_t *dev, uint32_t *code, uint8_t *channel_active);
+-bool ad7124_single_conversion(ad7124_dev_t *dev,
+-                              uint8_t channel,
+-                              uint32_t timeout_us,
+-                              uint32_t *code,
+-                              uint8_t *channel_active);
+-bool ad7124_calibrate_channel(ad7124_dev_t *dev,
+-                              uint8_t channel,
+-                              bool zero_scale,
+-                              bool full_scale,
+-                              uint32_t timeout_us);
+-
+-uint8_t ad7124_pga_gain(ad7124_pga_t pga);
+-double ad7124_code_to_bipolar_voltage(uint32_t code,
+-                                      double reference_volts,
+-                                      ad7124_pga_t pga);
+-double ad7124_code_to_unipolar_ratio(uint32_t code, ad7124_pga_t pga);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+diff --git ./drivers/thermocouple.c ./drivers/thermocouple.c
+deleted file mode 100644
+index 2b22e74..0000000
+--- ./drivers/thermocouple.c
++++ /dev/null
+@@ -1,318 +0,0 @@
+-#include "drivers/thermocouple.h"
+-
+-#include <ctype.h>
+-#include <math.h>
+-#include <stddef.h>
+-#include <string.h>
+-
+-typedef struct {
+-    double minimum_c;
+-    double maximum_c;
+-    const double *coefficients;
+-    size_t coefficient_count;
+-    bool has_exponential;
+-    double exponential_a0;
+-    double exponential_a1;
+-    double exponential_a2;
+-} thermocouple_piece_t;
+-
+-typedef struct {
+-    const char *name;
+-    const thermocouple_piece_t *pieces;
+-    size_t piece_count;
+-    double inverse_minimum_c;
+-    double inverse_maximum_c;
+-} thermocouple_definition_t;
+-
+-/* NIST SRD 60 / Monograph 175 reference-function coefficients, E in mV. */
+-static const double g_b_0[] = {
+-     0.000000000000e+00, -0.246508183460e-03,  0.590404211710e-05,
+-    -0.132579316360e-08,  0.156682919010e-11, -0.169445292400e-14,
+-     0.629903470940e-18,
+-};
+-static const double g_b_1[] = {
+-    -0.389381686210e+01,  0.285717474700e-01, -0.848851047850e-04,
+-     0.157852801640e-06, -0.168353448640e-09,  0.111097940130e-12,
+-    -0.445154310330e-16,  0.989756408210e-20, -0.937913302890e-24,
+-};
+-static const thermocouple_piece_t g_b_pieces[] = {
+-    { 0.0, 630.615, g_b_0, sizeof(g_b_0) / sizeof(g_b_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 630.615, 1820.0, g_b_1, sizeof(g_b_1) / sizeof(g_b_1[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const double g_e_0[] = {
+-     0.000000000000e+00,  0.586655087080e-01,  0.454109771240e-04,
+-    -0.779980486860e-06, -0.258001608430e-07, -0.594525830570e-09,
+-    -0.932140586670e-11, -0.102876055340e-12, -0.803701236210e-15,
+-    -0.439794973910e-17, -0.164147763550e-19, -0.396736195160e-22,
+-    -0.558273287210e-25, -0.346578420130e-28,
+-};
+-static const double g_e_1[] = {
+-     0.000000000000e+00,  0.586655087100e-01,  0.450322755820e-04,
+-     0.289084072120e-07, -0.330568966520e-09,  0.650244032700e-12,
+-    -0.191974955040e-15, -0.125366004970e-17,  0.214892175690e-20,
+-    -0.143880417820e-23,  0.359608994810e-27,
+-};
+-static const thermocouple_piece_t g_e_pieces[] = {
+-    { -270.0, 0.0, g_e_0, sizeof(g_e_0) / sizeof(g_e_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 0.0, 1000.0, g_e_1, sizeof(g_e_1) / sizeof(g_e_1[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const double g_j_0[] = {
+-     0.000000000000e+00,  0.503811878150e-01,  0.304758369300e-04,
+-    -0.856810657200e-07,  0.132281952950e-09, -0.170529583370e-12,
+-     0.209480906970e-15, -0.125383953360e-18,  0.156317256970e-22,
+-};
+-static const double g_j_1[] = {
+-     0.296456256810e+03, -0.149761277860e+01,  0.317871039240e-02,
+-    -0.318476867010e-05,  0.157208190040e-08, -0.306913690560e-12,
+-};
+-static const thermocouple_piece_t g_j_pieces[] = {
+-    { -210.0, 760.0, g_j_0, sizeof(g_j_0) / sizeof(g_j_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 760.0, 1200.0, g_j_1, sizeof(g_j_1) / sizeof(g_j_1[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const double g_k_0[] = {
+-     0.000000000000e+00,  0.394501280250e-01,  0.236223735980e-04,
+-    -0.328589067840e-06, -0.499048287770e-08, -0.675090591730e-10,
+-    -0.574103274280e-12, -0.310888728940e-14, -0.104516093650e-16,
+-    -0.198892668780e-19, -0.163226974860e-22,
+-};
+-static const double g_k_1[] = {
+-    -0.176004136860e-01,  0.389212049750e-01,  0.185587700320e-04,
+-    -0.994575928740e-07,  0.318409457190e-09, -0.560728448890e-12,
+-     0.560750590590e-15, -0.320207200030e-18,  0.971511471520e-22,
+-    -0.121047212750e-25,
+-};
+-static const thermocouple_piece_t g_k_pieces[] = {
+-    { -270.0, 0.0, g_k_0, sizeof(g_k_0) / sizeof(g_k_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 0.0, 1372.0, g_k_1, sizeof(g_k_1) / sizeof(g_k_1[0]), true,
+-      0.118597600000e+00, -0.118343200000e-03, 0.126968600000e+03 },
+-};
+-
+-static const double g_n_0[] = {
+-     0.000000000000e+00,  0.261591059620e-01,  0.109574842280e-04,
+-    -0.938411115540e-07, -0.464120397590e-10, -0.263033577160e-11,
+-    -0.226534380030e-13, -0.760893007910e-16, -0.934196678350e-19,
+-};
+-static const double g_n_1[] = {
+-     0.000000000000e+00,  0.259293946010e-01,  0.157101418800e-04,
+-     0.438256272370e-07, -0.252611697940e-09,  0.643118193390e-12,
+-    -0.100634715190e-14,  0.997453389920e-18, -0.608632456070e-21,
+-     0.208492293390e-24, -0.306821961510e-28,
+-};
+-static const thermocouple_piece_t g_n_pieces[] = {
+-    { -270.0, 0.0, g_n_0, sizeof(g_n_0) / sizeof(g_n_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 0.0, 1300.0, g_n_1, sizeof(g_n_1) / sizeof(g_n_1[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const double g_r_0[] = {
+-     0.000000000000e+00,  0.528961729765e-02,  0.139166589782e-04,
+-    -0.238855693017e-07,  0.356916001063e-10, -0.462347666298e-13,
+-     0.500777441034e-16, -0.373105886191e-19,  0.157716482367e-22,
+-    -0.281038625251e-26,
+-};
+-static const double g_r_1[] = {
+-     0.295157925316e+01, -0.252061251332e-02,  0.159564501865e-04,
+-    -0.764085947576e-08,  0.205305291024e-11, -0.293359668173e-15,
+-};
+-static const double g_r_2[] = {
+-     0.152232118209e+03, -0.268819888545e+00,  0.171280280471e-03,
+-    -0.345895706453e-07, -0.934633971046e-14,
+-};
+-static const thermocouple_piece_t g_r_pieces[] = {
+-    { -50.0, 1064.18, g_r_0, sizeof(g_r_0) / sizeof(g_r_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 1064.18, 1664.5, g_r_1, sizeof(g_r_1) / sizeof(g_r_1[0]), false, 0.0, 0.0, 0.0 },
+-    { 1664.5, 1768.1, g_r_2, sizeof(g_r_2) / sizeof(g_r_2[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const double g_s_0[] = {
+-     0.000000000000e+00,  0.540313308631e-02,  0.125934289740e-04,
+-    -0.232477968689e-07,  0.322028823036e-10, -0.331465196389e-13,
+-     0.255744251786e-16, -0.125068871393e-19,  0.271443176145e-23,
+-};
+-static const double g_s_1[] = {
+-     0.132900444085e+01,  0.334509311344e-02,  0.654805192818e-05,
+-    -0.164856259209e-08,  0.129989605174e-13,
+-};
+-static const double g_s_2[] = {
+-     0.146628232636e+03, -0.258430516752e+00,  0.163693574641e-03,
+-    -0.330439046987e-07, -0.943223690612e-14,
+-};
+-static const thermocouple_piece_t g_s_pieces[] = {
+-    { -50.0, 1064.18, g_s_0, sizeof(g_s_0) / sizeof(g_s_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 1064.18, 1664.5, g_s_1, sizeof(g_s_1) / sizeof(g_s_1[0]), false, 0.0, 0.0, 0.0 },
+-    { 1664.5, 1768.1, g_s_2, sizeof(g_s_2) / sizeof(g_s_2[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const double g_t_0[] = {
+-     0.000000000000e+00,  0.387481063640e-01,  0.441944343470e-04,
+-     0.118443231050e-06,  0.200329735540e-07,  0.901380195590e-09,
+-     0.226511565930e-10,  0.360711542050e-12,  0.384939398830e-14,
+-     0.282135219250e-16,  0.142515947790e-18,  0.487686622860e-21,
+-     0.107955392700e-23,  0.139450270620e-26,  0.797951539270e-30,
+-};
+-static const double g_t_1[] = {
+-     0.000000000000e+00,  0.387481063640e-01,  0.332922278800e-04,
+-     0.206182434040e-06, -0.218822568460e-08,  0.109968809280e-10,
+-    -0.308157587720e-13,  0.454791352900e-16, -0.275129016730e-19,
+-};
+-static const thermocouple_piece_t g_t_pieces[] = {
+-    { -270.0, 0.0, g_t_0, sizeof(g_t_0) / sizeof(g_t_0[0]), false, 0.0, 0.0, 0.0 },
+-    { 0.0, 400.0, g_t_1, sizeof(g_t_1) / sizeof(g_t_1[0]), false, 0.0, 0.0, 0.0 },
+-};
+-
+-static const thermocouple_definition_t g_definitions[THERMOCOUPLE_TYPE_COUNT] = {
+-    [THERMOCOUPLE_TYPE_B] = { "B", g_b_pieces, sizeof(g_b_pieces) / sizeof(g_b_pieces[0]), 250.0, 1820.0 },
+-    [THERMOCOUPLE_TYPE_E] = { "E", g_e_pieces, sizeof(g_e_pieces) / sizeof(g_e_pieces[0]), -270.0, 1000.0 },
+-    [THERMOCOUPLE_TYPE_J] = { "J", g_j_pieces, sizeof(g_j_pieces) / sizeof(g_j_pieces[0]), -210.0, 1200.0 },
+-    [THERMOCOUPLE_TYPE_K] = { "K", g_k_pieces, sizeof(g_k_pieces) / sizeof(g_k_pieces[0]), -270.0, 1372.0 },
+-    [THERMOCOUPLE_TYPE_N] = { "N", g_n_pieces, sizeof(g_n_pieces) / sizeof(g_n_pieces[0]), -270.0, 1300.0 },
+-    [THERMOCOUPLE_TYPE_R] = { "R", g_r_pieces, sizeof(g_r_pieces) / sizeof(g_r_pieces[0]), -50.0, 1768.1 },
+-    [THERMOCOUPLE_TYPE_S] = { "S", g_s_pieces, sizeof(g_s_pieces) / sizeof(g_s_pieces[0]), -50.0, 1768.1 },
+-    [THERMOCOUPLE_TYPE_T] = { "T", g_t_pieces, sizeof(g_t_pieces) / sizeof(g_t_pieces[0]), -270.0, 400.0 },
+-};
+-
+-static bool thermocouple_type_is_valid(thermocouple_type_t type)
+-{
+-    return type >= THERMOCOUPLE_TYPE_B && type < THERMOCOUPLE_TYPE_COUNT;
+-}
+-
+-static double polynomial(const double *coefficients, size_t count, double x)
+-{
+-    double result = 0.0;
+-    while (count > 0u) {
+-        count--;
+-        result = result * x + coefficients[count];
+-    }
+-    return result;
+-}
+-
+-const char *thermocouple_type_name(thermocouple_type_t type)
+-{
+-    return thermocouple_type_is_valid(type) ? g_definitions[type].name : "?";
+-}
+-
+-bool thermocouple_type_parse(const char *text, thermocouple_type_t *type)
+-{
+-    if (!text || !type) {
+-        return false;
+-    }
+-
+-    while (isspace((unsigned char)*text)) {
+-        text++;
+-    }
+-
+-    size_t length = strlen(text);
+-    if (length >= 4u &&
+-        (text[0] == 't' || text[0] == 'T') &&
+-        (text[1] == 'y' || text[1] == 'Y') &&
+-        (text[2] == 'p' || text[2] == 'P') &&
+-        (text[3] == 'e' || text[3] == 'E')) {
+-        text += 4;
+-        if (*text == '-' || *text == '_' || isspace((unsigned char)*text)) {
+-            text++;
+-        }
+-    }
+-    if (*text == '\0') {
+-        return false;
+-    }
+-
+-    char letter = (char)toupper((unsigned char)*text++);
+-    while (isspace((unsigned char)*text)) {
+-        text++;
+-    }
+-    if (*text != '\0') {
+-        return false;
+-    }
+-
+-    for (thermocouple_type_t candidate = THERMOCOUPLE_TYPE_B;
+-         candidate < THERMOCOUPLE_TYPE_COUNT;
+-         candidate = (thermocouple_type_t)(candidate + 1)) {
+-        if (g_definitions[candidate].name[0] == letter) {
+-            *type = candidate;
+-            return true;
+-        }
+-    }
+-    return false;
+-}
+-
+-bool thermocouple_emf_mv(thermocouple_type_t type,
+-                          double temperature_c,
+-                          double *emf_mv)
+-{
+-    if (!thermocouple_type_is_valid(type) || !emf_mv ||
+-        !isfinite(temperature_c)) {
+-        return false;
+-    }
+-
+-    const thermocouple_definition_t *definition = &g_definitions[type];
+-    for (size_t i = 0u; i < definition->piece_count; i++) {
+-        const thermocouple_piece_t *piece = &definition->pieces[i];
+-        if (temperature_c < piece->minimum_c ||
+-            temperature_c > piece->maximum_c) {
+-            continue;
+-        }
+-
+-        double result = polynomial(piece->coefficients,
+-                                   piece->coefficient_count,
+-                                   temperature_c);
+-        if (piece->has_exponential) {
+-            double delta = temperature_c - piece->exponential_a2;
+-            result += piece->exponential_a0 *
+-                      exp(piece->exponential_a1 * delta * delta);
+-        }
+-        *emf_mv = result;
+-        return isfinite(result);
+-    }
+-    return false;
+-}
+-
+-bool thermocouple_compensated_temperature_c(thermocouple_type_t type,
+-                                              double measured_mv,
+-                                              double cold_junction_c,
+-                                              double *temperature_c,
+-                                              double *compensated_emf_mv)
+-{
+-    if (!thermocouple_type_is_valid(type) || !temperature_c ||
+-        !isfinite(measured_mv) || !isfinite(cold_junction_c)) {
+-        return false;
+-    }
+-
+-    double cjc_emf_mv = 0.0;
+-    if (!thermocouple_emf_mv(type, cold_junction_c, &cjc_emf_mv)) {
+-        return false;
+-    }
+-
+-    const thermocouple_definition_t *definition = &g_definitions[type];
+-    double target_mv = cjc_emf_mv + measured_mv;
+-    double low_c = definition->inverse_minimum_c;
+-    double high_c = definition->inverse_maximum_c;
+-    double low_mv = 0.0;
+-    double high_mv = 0.0;
+-    if (!thermocouple_emf_mv(type, low_c, &low_mv) ||
+-        !thermocouple_emf_mv(type, high_c, &high_mv) ||
+-        target_mv < low_mv || target_mv > high_mv) {
+-        return false;
+-    }
+-
+-    /* Reference functions are monotonic over each type's supported inverse range. */
+-    for (unsigned iteration = 0u; iteration < 32u; iteration++) {
+-        double midpoint_c = (low_c + high_c) * 0.5;
+-        double midpoint_mv = 0.0;
+-        if (!thermocouple_emf_mv(type, midpoint_c, &midpoint_mv)) {
+-            return false;
+-        }
+-        if (midpoint_mv < target_mv) {
+-            low_c = midpoint_c;
+-        } else {
+-            high_c = midpoint_c;
+-        }
+-    }
+-
+-    *temperature_c = (low_c + high_c) * 0.5;
+-    if (compensated_emf_mv) {
+-        *compensated_emf_mv = target_mv;
+-    }
+-    return isfinite(*temperature_c);
+-}
+diff --git ./drivers/thermocouple.h ./drivers/thermocouple.h
+deleted file mode 100644
+index 6ad7903..0000000
+--- ./drivers/thermocouple.h
++++ /dev/null
+@@ -1,46 +0,0 @@
+-#pragma once
+-
+-#include <stdbool.h>
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-/* Letter-designated ITS-90 thermocouple types from NIST SRD 60. */
+-typedef enum {
+-    THERMOCOUPLE_TYPE_B = 0,
+-    THERMOCOUPLE_TYPE_E,
+-    THERMOCOUPLE_TYPE_J,
+-    THERMOCOUPLE_TYPE_K,
+-    THERMOCOUPLE_TYPE_N,
+-    THERMOCOUPLE_TYPE_R,
+-    THERMOCOUPLE_TYPE_S,
+-    THERMOCOUPLE_TYPE_T,
+-    THERMOCOUPLE_TYPE_COUNT,
+-} thermocouple_type_t;
+-
+-const char *thermocouple_type_name(thermocouple_type_t type);
+-bool thermocouple_type_parse(const char *text, thermocouple_type_t *type);
+-
+-/*
+- * Convert temperature to thermoelectric voltage relative to a 0 C reference.
+- * Voltage is returned in millivolts.
+- */
+-bool thermocouple_emf_mv(thermocouple_type_t type,
+-                          double temperature_c,
+-                          double *emf_mv);
+-
+-/*
+- * Apply cold-junction compensation and convert measured differential mV to C.
+- * compensated_emf_mv may be NULL; when supplied it receives the equivalent
+- * thermoelectric voltage relative to a 0 C reference junction.
+- */
+-bool thermocouple_compensated_temperature_c(thermocouple_type_t type,
+-                                              double measured_mv,
+-                                              double cold_junction_c,
+-                                              double *temperature_c,
+-                                              double *compensated_emf_mv);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+diff --git ./modules/ztm_adc.c ./modules/ztm_adc.c
+deleted file mode 100644
+index c9a2399..0000000
+--- ./modules/ztm_adc.c
++++ /dev/null
+@@ -1,1094 +0,0 @@
+-#include "modules/ztm_adc.h"
+-
+-#include <math.h>
+-#include <stdio.h>
+-#include <string.h>
+-
+-#include "hardware/spi.h"
+-#include "pico/stdlib.h"
+-
+-#include "ztmb/log.h"
+-
+-#define ZTM_ADC_TC_PGA AD7124_PGA_32
+-
+-/*
+- * Diagnostics useful during bench testing without enabling intrusive LDO tests.
+- *
+- * Do not enable REF_DET for this board. The RTD reference is generated only
+- * while an excitation current is active. The board uses 500 uA through the
+- * fitted 2 kohm resistor, producing about 1.0 V during a measurement. The
+- * reference detector is still unsuitable because it continuously reports the
+- * intentionally absent reference whenever the one-shot excitation is off.
+- */
+-#define ZTM_ADC_ERROR_ENABLE_MASK \
+-    (AD7124_ERROR_ADC_CAL       | AD7124_ERROR_ADC_CONV     | \
+-     AD7124_ERROR_ADC_SAT       | \
+-     AD7124_ERROR_SPI_IGNORE    | AD7124_ERROR_SPI_SCLK_CNT | \
+-     AD7124_ERROR_SPI_READ      | AD7124_ERROR_SPI_WRITE    | \
+-     AD7124_ERROR_MM_CRC        | AD7124_ERROR_ROM_CRC)
+-
+-static const uint8_t g_tc_ain_positive[ZTM_ADC_TC_COUNT] = { 0u, 2u, 4u };
+-static const uint8_t g_tc_ain_negative[ZTM_ADC_TC_COUNT] = { 1u, 3u, 5u };
+-
+-ztm_adc_t ztm_adc_1;
+-
+-static bool ztm_adc_try_lock(ztm_adc_t *module)
+-{
+-    if (!module) {
+-        return false;
+-    }
+-    return !__atomic_test_and_set(&module->busy, __ATOMIC_ACQUIRE);
+-}
+-
+-static void ztm_adc_unlock(ztm_adc_t *module)
+-{
+-    if (module) {
+-        __atomic_clear(&module->busy, __ATOMIC_RELEASE);
+-    }
+-}
+-
+-static bool ztm_adc_configure_channels(ztm_adc_t *module)
+-{
+-    ad7124_dev_t *adc = &module->adc;
+-
+-    /* No channel is left continuously enabled; measurements select one safely. */
+-    for (uint8_t channel = 0u; channel < AD7124_CHANNEL_COUNT; channel++) {
+-        if (!ad7124_config_channel(adc, channel, false, 0u, 0u, 1u)) {
+-            return false;
+-        }
+-    }
+-
+-    for (uint8_t tc = 0u; tc < ZTM_ADC_TC_COUNT; tc++) {
+-        if (!ad7124_config_channel(adc,
+-                                   (uint8_t)(ZTM_ADC_CHANNEL_TC_FIRST + tc),
+-                                   false,
+-                                   ZTM_ADC_SETUP_TC,
+-                                   g_tc_ain_positive[tc],
+-                                   g_tc_ain_negative[tc])) {
+-            return false;
+-        }
+-    }
+-
+-    if (!ad7124_config_channel(adc,
+-                               ZTM_ADC_CHANNEL_CJC,
+-                               false,
+-                               ZTM_ADC_SETUP_RTD,
+-                               ZTM_ADC_AIN_CJC,
+-                               ZTM_ADC_AIN_RTD_RETURN)) {
+-        return false;
+-    }
+-
+-    for (uint8_t rtd = 0u; rtd < ZTM_ADC_RTD_COUNT; rtd++) {
+-        if (!ad7124_config_channel(adc,
+-                                   (uint8_t)(ZTM_ADC_CHANNEL_RTD_FIRST + rtd),
+-                                   false,
+-                                   ZTM_ADC_SETUP_RTD,
+-                                   (uint8_t)(ZTM_ADC_AIN_RTD_FIRST + rtd),
+-                                   ZTM_ADC_AIN_RTD_RETURN)) {
+-            return false;
+-        }
+-    }
+-
+-    return true;
+-}
+-
+-static void ztm_adc_capture_failure_registers(ztm_adc_t *module)
+-{
+-    if (!module) {
+-        return;
+-    }
+-    (void)ad7124_read_error(&module->adc, &module->last_measurement.error_mask);
+-}
+-
+-static bool ztm_adc_measure_channel_unlocked(ztm_adc_t *module,
+-                                              uint8_t channel,
+-                                              uint32_t *code)
+-{
+-    if (!module || !code || channel >= AD7124_CHANNEL_COUNT) {
+-        return false;
+-    }
+-
+-    ad7124_dev_t *adc = &module->adc;
+-    ztm_adc_measure_diag_t *diag = &module->last_measurement;
+-    memset(diag, 0, sizeof(*diag));
+-    diag->stage = ZTM_ADC_MEASURE_NONE;
+-    diag->expected_channel = channel;
+-    diag->active_channel = 0xFFu;
+-    (void)ad7124_read_status(adc, &diag->status_before);
+-
+-    if (!ad7124_set_channel_enabled(adc, channel, true)) {
+-        diag->stage = ZTM_ADC_MEASURE_CHANNEL_ENABLE;
+-        ztm_adc_capture_failure_registers(module);
+-        return false;
+-    }
+-    (void)ad7124_read_reg16(adc, AD7124_REG_CHANNEL(channel),
+-                            &diag->channel_register);
+-    uint8_t setup = (uint8_t)((diag->channel_register >> 12) & 0x07u);
+-    (void)ad7124_read_reg24(adc, AD7124_REG_FILTER(setup),
+-                            &diag->filter_register);
+-
+-    if (!ad7124_set_mode(adc, AD7124_MODE_SINGLE)) {
+-        diag->stage = ZTM_ADC_MEASURE_MODE_START;
+-        ztm_adc_capture_failure_registers(module);
+-        (void)ad7124_set_channel_enabled(adc, channel, false);
+-        return false;
+-    }
+-
+-    if (!ad7124_read_reg16(adc, AD7124_REG_ADC_CONTROL,
+-                            &diag->adc_control_after_start) ||
+-        ((diag->adc_control_after_start >> 2) & 0x0Fu) != AD7124_MODE_SINGLE) {
+-        diag->stage = ZTM_ADC_MEASURE_MODE_VERIFY;
+-        ztm_adc_capture_failure_registers(module);
+-        (void)ad7124_set_mode(adc, AD7124_MODE_STANDBY);
+-        (void)ad7124_set_channel_enabled(adc, channel, false);
+-        return false;
+-    }
+-
+-    uint64_t started_us = time_us_64();
+-    uint8_t status = AD7124_STATUS_RDY;
+-    bool ready = false;
+-    do {
+-        if (!ad7124_read_status(adc, &status)) {
+-            diag->stage = ZTM_ADC_MEASURE_READY_TIMEOUT;
+-            ztm_adc_capture_failure_registers(module);
+-            break;
+-        }
+-        diag->ready_polls++;
+-        if ((status & AD7124_STATUS_RDY) == 0u) {
+-            ready = true;
+-            break;
+-        }
+-        /* A 1 ms cadence is ample for a low-rate sigma-delta converter and
+-         * avoids hammering the shared SPI fabric while the filter settles. */
+-        busy_wait_us_32(1000u);
+-    } while ((time_us_64() - started_us) < ZTM_ADC_CONVERSION_TIMEOUT_US);
+-
+-    diag->elapsed_us = (uint32_t)(time_us_64() - started_us);
+-    diag->status_ready = status;
+-    (void)ad7124_read_reg16(adc, AD7124_REG_ADC_CONTROL,
+-                            &diag->adc_control_at_result);
+-
+-    if (!ready) {
+-        diag->stage = ZTM_ADC_MEASURE_READY_TIMEOUT;
+-        ztm_adc_capture_failure_registers(module);
+-        (void)ad7124_set_mode(adc, AD7124_MODE_STANDBY);
+-        (void)ad7124_set_channel_enabled(adc, channel, false);
+-        (void)ad7124_read_status(adc, &diag->status_after_cleanup);
+-        (void)ad7124_read_reg16(adc, AD7124_REG_ADC_CONTROL,
+-                                &diag->adc_control_after_cleanup);
+-        return false;
+-    }
+-
+-    uint8_t active_channel = 0xFFu;
+-    if (!ad7124_read_sample(adc, code, &active_channel)) {
+-        diag->stage = ZTM_ADC_MEASURE_DATA_READ;
+-        ztm_adc_capture_failure_registers(module);
+-        (void)ad7124_set_mode(adc, AD7124_MODE_STANDBY);
+-        (void)ad7124_set_channel_enabled(adc, channel, false);
+-        (void)ad7124_read_status(adc, &diag->status_after_cleanup);
+-        (void)ad7124_read_reg16(adc, AD7124_REG_ADC_CONTROL,
+-                                &diag->adc_control_after_cleanup);
+-        return false;
+-    }
+-
+-    diag->raw_code = *code;
+-    diag->active_channel = active_channel;
+-    bool ok = true;
+-    if (adc->data_status_enabled && active_channel != channel) {
+-        diag->stage = ZTM_ADC_MEASURE_CHANNEL_MISMATCH;
+-        ztm_adc_capture_failure_registers(module);
+-        ok = false;
+-    }
+-
+-    if (!ad7124_set_mode(adc, AD7124_MODE_STANDBY)) {
+-        if (ok) {
+-            diag->stage = ZTM_ADC_MEASURE_STANDBY;
+-            ztm_adc_capture_failure_registers(module);
+-        }
+-        ok = false;
+-    }
+-    if (!ad7124_set_channel_enabled(adc, channel, false)) {
+-        if (ok) {
+-            diag->stage = ZTM_ADC_MEASURE_CHANNEL_DISABLE;
+-            ztm_adc_capture_failure_registers(module);
+-        }
+-        ok = false;
+-    }
+-    (void)ad7124_read_status(adc, &diag->status_after_cleanup);
+-    (void)ad7124_read_reg16(adc, AD7124_REG_ADC_CONTROL,
+-                            &diag->adc_control_after_cleanup);
+-
+-    if (ok) {
+-        diag->stage = ZTM_ADC_MEASURE_OK;
+-    }
+-    return ok;
+-}
+-
+-static bool ztm_adc_measure_rtd_unlocked(ztm_adc_t *module,
+-                                         uint8_t channel,
+-                                         uint8_t ain_positive,
+-                                         uint8_t logical_index,
+-                                         ztm_adc_rtd_sample_t *sample)
+-{
+-    if (!module || !sample || ain_positive > 15u) {
+-        return false;
+-    }
+-
+-    memset(sample, 0, sizeof(*sample));
+-
+-    bool current_on = ad7124_set_iout(&module->adc,
+-                                      module->rtd_excitation,
+-                                      ain_positive,
+-                                      AD7124_IOUT_OFF,
+-                                      0u,
+-                                      false);
+-    if (!current_on) {
+-        memset(&module->last_measurement, 0, sizeof(module->last_measurement));
+-        module->last_measurement.stage = ZTM_ADC_MEASURE_IOUT_ENABLE;
+-        module->last_measurement.expected_channel = channel;
+-        ztm_adc_capture_failure_registers(module);
+-        return false;
+-    }
+-    /* Allow the current source, input RC network, and reference node to settle. */
+-    busy_wait_us_32(ZTM_ADC_IOUT_SETTLE_US);
+-
+-    uint32_t code = 0u;
+-    bool ok = ztm_adc_measure_channel_unlocked(module, channel, &code);
+-    (void)ad7124_read_reg24(&module->adc, AD7124_REG_IO_CONTROL_1,
+-                            &module->last_measurement.io_control_1);
+-
+-    /* Excitation must never remain enabled after a one-shot read, even on error. */
+-    if (!ad7124_disable_iouts(&module->adc)) {
+-        if (ok) {
+-            module->last_measurement.stage = ZTM_ADC_MEASURE_IOUT_DISABLE;
+-            ztm_adc_capture_failure_registers(module);
+-        }
+-        ok = false;
+-    }
+-
+-    if (!ok) {
+-        return false;
+-    }
+-
+-    sample->valid = true;
+-    sample->logical_index = logical_index;
+-    sample->ad7124_channel = channel;
+-    sample->ain_positive = ain_positive;
+-    sample->raw_code = code;
+-
+-    if (code == 0u || code == AD7124_DATA_FULL_SCALE) {
+-        sample->status = ZTM_ADC_SENSOR_DISCONNECTED;
+-        return true;
+-    }
+-
+-    double resistance = ztm_adc_rtd_resistance_from_code(
+-        code,
+-        module->reference_resistor_ohms);
+-    module->last_measurement.resistance_ohms = resistance;
+-    sample->resistance_ohms = resistance;
+-    if (!ztm_adc_pt1000_temperature(resistance, &sample->temperature_c)) {
+-        module->last_measurement.stage = ZTM_ADC_MEASURE_SENSOR_RANGE;
+-        sample->status = ZTM_ADC_SENSOR_OUT_OF_RANGE;
+-        return true;
+-    }
+-
+-    sample->status = ZTM_ADC_SENSOR_OK;
+-    return true;
+-}
+-
+-static bool ztm_adc_measure_cjc_unlocked(ztm_adc_t *module,
+-                                         ztm_adc_rtd_sample_t *sample)
+-{
+-    return ztm_adc_measure_rtd_unlocked(module,
+-                                        ZTM_ADC_CHANNEL_CJC,
+-                                        ZTM_ADC_AIN_CJC,
+-                                        0u,
+-                                        sample);
+-}
+-
+-static bool ztm_adc_measure_external_rtd_unlocked(ztm_adc_t *module,
+-                                                   uint8_t rtd_1based,
+-                                                   ztm_adc_rtd_sample_t *sample)
+-{
+-    if (rtd_1based < 1u || rtd_1based > ZTM_ADC_RTD_COUNT) {
+-        return false;
+-    }
+-
+-    uint8_t index = (uint8_t)(rtd_1based - 1u);
+-    return ztm_adc_measure_rtd_unlocked(module,
+-                                        (uint8_t)(ZTM_ADC_CHANNEL_RTD_FIRST + index),
+-                                        (uint8_t)(ZTM_ADC_AIN_RTD_FIRST + index),
+-                                        rtd_1based,
+-                                        sample);
+-}
+-
+-static bool ztm_adc_measure_tc_unlocked(ztm_adc_t *module,
+-                                        uint8_t tc_1based,
+-                                        bool cold_junction_valid,
+-                                        double cold_junction_c,
+-                                        ztm_adc_tc_sample_t *sample)
+-{
+-    if (!module || !sample || tc_1based < 1u || tc_1based > ZTM_ADC_TC_COUNT) {
+-        return false;
+-    }
+-
+-    uint8_t index = (uint8_t)(tc_1based - 1u);
+-    uint8_t channel = (uint8_t)(ZTM_ADC_CHANNEL_TC_FIRST + index);
+-    uint32_t code = 0u;
+-    memset(sample, 0, sizeof(*sample));
+-
+-    /* Ensure no RTD excitation contaminates a thermocouple measurement. */
+-    if (!ad7124_disable_iouts(&module->adc) ||
+-        !ztm_adc_measure_channel_unlocked(module, channel, &code)) {
+-        return false;
+-    }
+-
+-    sample->valid = true;
+-    sample->logical_index = tc_1based;
+-    sample->ad7124_channel = channel;
+-    sample->ain_positive = g_tc_ain_positive[index];
+-    sample->ain_negative = g_tc_ain_negative[index];
+-    sample->raw_code = code;
+-    sample->type = module->thermocouple_types[index];
+-
+-    if (code == 0u || code == AD7124_DATA_FULL_SCALE) {
+-        sample->status = ZTM_ADC_SENSOR_DISCONNECTED;
+-        return true;
+-    }
+-
+-    double volts = ad7124_code_to_bipolar_voltage(code,
+-                                                   ZTM_ADC_INTERNAL_REF_VOLTS,
+-                                                   ZTM_ADC_TC_PGA);
+-    sample->differential_mv = volts * 1000.0;
+-    sample->cold_junction_valid = cold_junction_valid;
+-    sample->cold_junction_c = cold_junction_c;
+-    if (!cold_junction_valid) {
+-        sample->status = ZTM_ADC_SENSOR_CJC_UNAVAILABLE;
+-        return true;
+-    }
+-
+-    if (!thermocouple_compensated_temperature_c(sample->type,
+-                                                  sample->differential_mv,
+-                                                  cold_junction_c,
+-                                                  &sample->temperature_c,
+-                                                  &sample->compensated_mv)) {
+-        sample->status = ZTM_ADC_SENSOR_OUT_OF_RANGE;
+-        return true;
+-    }
+-
+-    sample->status = ZTM_ADC_SENSOR_OK;
+-    return true;
+-}
+-
+-static void ztm_adc_log_error_bit(uint32_t mask, const char *message)
+-{
+-    if (mask != 0u) {
+-        log_printf("ERROR: AD7124 %s\n", message);
+-    }
+-}
+-
+-static void ztm_adc_log_new_errors(uint32_t new_errors)
+-{
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_LDO_CAP, "LDO Capacitor Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_ADC_CAL, "Calibration Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_ADC_CONV, "Conversion Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_ADC_SAT, "Input Saturation");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_AINP_OV, "AIN+ Overvoltage");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_AINP_UV, "AIN+ Undervoltage");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_AINM_OV, "AIN- Overvoltage");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_AINM_UV, "AIN- Undervoltage");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_REF_DET, "Reference Missing/Low");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_DLDO_PSM, "Digital LDO Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_ALDO_PSM, "Analog LDO Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_SPI_IGNORE, "SPI Command Ignored");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_SPI_SCLK_CNT, "SPI Clock Count Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_SPI_READ, "Invalid SPI Read");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_SPI_WRITE, "Invalid SPI Write");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_SPI_CRC, "SPI CRC Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_MM_CRC, "Register Memory CRC Fault");
+-    ztm_adc_log_error_bit(new_errors & AD7124_ERROR_ROM_CRC, "ROM CRC Fault");
+-}
+-
+-static uint16_t ztm_adc_expected_channel_value(uint8_t channel)
+-{
+-    uint8_t setup = 0u;
+-    uint8_t ain_positive = 0u;
+-    uint8_t ain_negative = 1u;
+-
+-    if (channel < ZTM_ADC_TC_COUNT) {
+-        setup = ZTM_ADC_SETUP_TC;
+-        ain_positive = g_tc_ain_positive[channel];
+-        ain_negative = g_tc_ain_negative[channel];
+-    } else if (channel == ZTM_ADC_CHANNEL_CJC) {
+-        setup = ZTM_ADC_SETUP_RTD;
+-        ain_positive = ZTM_ADC_AIN_CJC;
+-        ain_negative = ZTM_ADC_AIN_RTD_RETURN;
+-    } else if (channel >= ZTM_ADC_CHANNEL_RTD_FIRST &&
+-               channel < ZTM_ADC_CHANNEL_RTD_FIRST + ZTM_ADC_RTD_COUNT) {
+-        setup = ZTM_ADC_SETUP_RTD;
+-        ain_positive = (uint8_t)(ZTM_ADC_AIN_RTD_FIRST +
+-                                 channel - ZTM_ADC_CHANNEL_RTD_FIRST);
+-        ain_negative = ZTM_ADC_AIN_RTD_RETURN;
+-    }
+-
+-    return (uint16_t)(((uint16_t)setup << 12) |
+-                      ((uint16_t)ain_positive << 5) |
+-                      (uint16_t)ain_negative);
+-}
+-
+-static bool ztm_adc_verify_reg16(ad7124_dev_t *adc,
+-                                 ad7124_reg_t reg,
+-                                 uint16_t expected,
+-                                 const char *name,
+-                                 bool log_mismatch)
+-{
+-    uint16_t actual = 0u;
+-    if (!ad7124_read_reg16(adc, reg, &actual)) {
+-        if (log_mismatch) {
+-            log_printf("ERROR: AD7124 failed to read %s during configuration verification\n",
+-                       name);
+-        }
+-        return false;
+-    }
+-    if (actual != expected) {
+-        if (log_mismatch) {
+-            log_printf("ERROR: AD7124 %s mismatch: expected 0x%04X, read 0x%04X\n",
+-                       name, expected, actual);
+-        }
+-        return false;
+-    }
+-    return true;
+-}
+-
+-static bool ztm_adc_verify_reg24(ad7124_dev_t *adc,
+-                                 ad7124_reg_t reg,
+-                                 uint32_t expected,
+-                                 const char *name,
+-                                 bool log_mismatch)
+-{
+-    uint32_t actual = 0u;
+-    if (!ad7124_read_reg24(adc, reg, &actual)) {
+-        if (log_mismatch) {
+-            log_printf("ERROR: AD7124 failed to read %s during configuration verification\n",
+-                       name);
+-        }
+-        return false;
+-    }
+-    actual &= 0xFFFFFFu;
+-    expected &= 0xFFFFFFu;
+-    if (actual != expected) {
+-        if (log_mismatch) {
+-            log_printf("ERROR: AD7124 %s mismatch: expected 0x%06lX, read 0x%06lX\n",
+-                       name, (unsigned long)expected, (unsigned long)actual);
+-        }
+-        return false;
+-    }
+-    return true;
+-}
+-
+-static bool ztm_adc_verify_configuration_unlocked(ztm_adc_t *module,
+-                                                   bool log_mismatch)
+-{
+-    if (!module) {
+-        return false;
+-    }
+-
+-    const uint16_t expected_adc_control =
+-        (uint16_t)((1u << 10) | (1u << 9) | (1u << 8) |
+-                   ((uint16_t)AD7124_POWER_MID << 6) |
+-                   ((uint16_t)AD7124_MODE_STANDBY << 2));
+-    const uint16_t expected_tc_config =
+-        (uint16_t)((1u << 11) | (1u << 6) | (1u << 5) |
+-                   ((uint16_t)AD7124_REF_INTERNAL << 3) |
+-                   (uint16_t)ZTM_ADC_TC_PGA);
+-    const uint16_t expected_rtd_config =
+-        (uint16_t)((1u << 6) | (1u << 5) |
+-                   ((uint16_t)AD7124_REF_REFIN1 << 3) |
+-                   (uint16_t)AD7124_PGA_1);
+-    const uint32_t expected_filter = (uint32_t)ZTM_ADC_FILTER_FS;
+-
+-    bool ok = true;
+-    ok = ztm_adc_verify_reg16(&module->adc, AD7124_REG_ADC_CONTROL,
+-                              expected_adc_control, "ADC_CONTROL", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg24(&module->adc, AD7124_REG_ERROR_EN,
+-                              ZTM_ADC_ERROR_ENABLE_MASK, "ERROR_EN", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg16(&module->adc, AD7124_REG_CONFIG(ZTM_ADC_SETUP_TC),
+-                              expected_tc_config, "CONFIG_TC", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg16(&module->adc, AD7124_REG_CONFIG(ZTM_ADC_SETUP_RTD),
+-                              expected_rtd_config, "CONFIG_RTD", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg24(&module->adc, AD7124_REG_FILTER(ZTM_ADC_SETUP_TC),
+-                              expected_filter, "FILTER_TC", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg24(&module->adc, AD7124_REG_FILTER(ZTM_ADC_SETUP_RTD),
+-                              expected_filter, "FILTER_RTD", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg24(&module->adc, AD7124_REG_IO_CONTROL_1,
+-                              0u, "IO_CONTROL_1", log_mismatch) && ok;
+-    ok = ztm_adc_verify_reg16(&module->adc, AD7124_REG_IO_CONTROL_2,
+-                              ZTM_ADC_TC_VBIAS_MASK, "IO_CONTROL_2", log_mismatch) && ok;
+-
+-    for (uint8_t channel = 0u; channel < AD7124_CHANNEL_COUNT; channel++) {
+-        char name[16];
+-        (void)snprintf(name, sizeof(name), "CHANNEL_%u", (unsigned)channel);
+-        ok = ztm_adc_verify_reg16(&module->adc,
+-                                  AD7124_REG_CHANNEL(channel),
+-                                  ztm_adc_expected_channel_value(channel),
+-                                  name,
+-                                  log_mismatch) && ok;
+-    }
+-
+-    module->configuration_verified = ok;
+-    if (!ok) {
+-        module->configuration_error_count++;
+-    }
+-    return ok;
+-}
+-
+-int ztm_adc_init(void *ctx, void *spi, int8_t cs_pin, int8_t en_pin)
+-{
+-    if (!ctx || !spi || cs_pin < 0) {
+-        return -1;
+-    }
+-
+-    ztm_adc_t *module = (ztm_adc_t *)ctx;
+-    memset(module, 0, sizeof(*module));
+-    module->reference_resistor_ohms = ZTM_ADC_RREF_OHMS;
+-    module->rtd_excitation = ZTM_ADC_RTD_EXCITATION;
+-    for (uint8_t tc = 0u; tc < ZTM_ADC_TC_COUNT; tc++) {
+-        module->thermocouple_types[tc] = THERMOCOUPLE_TYPE_K;
+-    }
+-
+-    static const bus_spi_config_t spi_config = {
+-        .baud_hz = 1000000u,
+-        .data_bits = 8u,
+-        .cpol = SPI_CPOL_1,
+-        .cpha = SPI_CPHA_1,
+-        .order = SPI_MSB_FIRST,
+-        .cs_setup_us = 0u,
+-        .cs_hold_us = 0u,
+-        .cs_high_us = 1u,
+-    };
+-
+-    if (!bus_spi_init(&module->adc.spi_bus,
+-                      (spi_inst_t *)spi,
+-                      (uint)cs_pin,
+-                      en_pin,
+-                      &spi_config)) {
+-        return -2;
+-    }
+-
+-    ad7124_init(&module->adc);
+-    if (!ad7124_reset(&module->adc)) {
+-        return -3;
+-    }
+-
+-    if (!ad7124_read_id(&module->adc, &module->device_id) ||
+-        !ad7124_id_is_ad7124_8(module->device_id)) {
+-        return -4;
+-    }
+-
+-    if (!ad7124_config_adc_control(&module->adc,
+-                                   AD7124_POWER_MID,
+-                                   AD7124_MODE_STANDBY,
+-                                   true,
+-                                   true,
+-                                   true)) {
+-        return -5;
+-    }
+-
+-    if (!ad7124_config_error_enable(&module->adc,
+-                                    ZTM_ADC_ERROR_ENABLE_MASK)) {
+-        return -6;
+-    }
+-
+-    /* Setup 0: floating thermocouples, internal 2.5 V reference, ±78 mV range. */
+-    if (!ad7124_config_setup(&module->adc,
+-                             ZTM_ADC_SETUP_TC,
+-                             AD7124_REF_INTERNAL,
+-                             true,
+-                             ZTM_ADC_TC_PGA,
+-                             true, true,
+-                             false, false,
+-                             0u) ||
+-        !ad7124_config_filter(&module->adc,
+-                              ZTM_ADC_SETUP_TC,
+-                              AD7124_FILTER_SINC4,
+-                              0u,
+-                              false,
+-                              false,
+-                              ZTM_ADC_FILTER_FS)) {
+-        return -7;
+-    }
+-
+-    /* Setup 1: Pt1000s, unipolar and ratiometric against REFIN1. */
+-    if (!ad7124_config_setup(&module->adc,
+-                             ZTM_ADC_SETUP_RTD,
+-                             AD7124_REF_REFIN1,
+-                             false,
+-                             AD7124_PGA_1,
+-                             true, true,
+-                             false, false,
+-                             0u) ||
+-        !ad7124_config_filter(&module->adc,
+-                              ZTM_ADC_SETUP_RTD,
+-                              AD7124_FILTER_SINC4,
+-                              0u,
+-                              false,
+-                              false,
+-                              ZTM_ADC_FILTER_FS)) {
+-        return -8;
+-    }
+-
+-    if (!ztm_adc_configure_channels(module) ||
+-        !ad7124_set_bias_mask(&module->adc, ZTM_ADC_TC_VBIAS_MASK) ||
+-        !ad7124_disable_iouts(&module->adc)) {
+-        return -9;
+-    }
+-
+-    /* Clear the expected reset/POR indication and any stale reset diagnostics. */
+-    uint8_t status = 0u;
+-    uint32_t errors = 0u;
+-    if (!ad7124_read_status(&module->adc, &status) ||
+-        !ad7124_read_error(&module->adc, &errors)) {
+-        return -10;
+-    }
+-
+-    if (!ztm_adc_verify_configuration_unlocked(module, true)) {
+-        return -11;
+-    }
+-
+-    module->ready = true;
+-    log_printf("AD7124-8 ready: ID=0x%02X, 3 TC + CJC Pt1000 + 8 RTD\n",
+-               module->device_id);
+-    return 0;
+-}
+-
+-int ztm_adc_poll(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready) {
+-        return -1;
+-    }
+-
+-    /* A console measurement may own a multi-register sequence. Skip, don't block. */
+-    if (!ztm_adc_try_lock(module)) {
+-        return 0;
+-    }
+-
+-    uint8_t status = 0u;
+-    if (!ad7124_read_status(&module->adc, &status)) {
+-        module->communication_error_count++;
+-        ztm_adc_unlock(module);
+-        return -2;
+-    }
+-
+-    bool por_fault = (status & AD7124_STATUS_POR_FLAG) != 0u;
+-    if (por_fault && !module->por_fault_active) {
+-        module->error_event_count++;
+-        module->configuration_verified = false;
+-        log_printf("ERROR: AD7124 Unexpected Reset!\n");
+-    }
+-    module->por_fault_active = por_fault;
+-
+-    if ((status & AD7124_STATUS_ERROR_FLAG) != 0u) {
+-        uint32_t errors = 0u;
+-        if (!ad7124_read_error(&module->adc, &errors)) {
+-            module->communication_error_count++;
+-            ztm_adc_unlock(module);
+-            return -3;
+-        }
+-
+-        uint32_t new_errors = errors & ~module->last_error_mask;
+-        if (new_errors != 0u) {
+-            module->error_event_count++;
+-            ztm_adc_log_new_errors(new_errors);
+-        }
+-        module->last_error_mask = errors;
+-    } else {
+-        module->last_error_mask = 0u;
+-    }
+-
+-    ztm_adc_unlock(module);
+-    return 0;
+-}
+-
+-int ztm_adc_deinit(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (module->ready && ztm_adc_try_lock(module)) {
+-        (void)ad7124_disable_iouts(&module->adc);
+-        (void)ad7124_set_mode(&module->adc, AD7124_MODE_POWERDOWN);
+-        ztm_adc_unlock(module);
+-    }
+-    module->ready = false;
+-    return 0;
+-}
+-
+-bool ztm_adc_ready(void)
+-{
+-    return ztm_adc_1.ready;
+-}
+-
+-double ztm_adc_rtd_resistance_from_code(uint32_t code,
+-                                         double reference_resistor_ohms)
+-{
+-    if (reference_resistor_ohms <= 0.0) {
+-        return NAN;
+-    }
+-    return reference_resistor_ohms *
+-           ((double)(code & AD7124_DATA_FULL_SCALE) /
+-            (double)AD7124_DATA_CODE_COUNT);
+-}
+-
+-bool ztm_adc_pt1000_temperature(double resistance_ohms, double *temperature_c)
+-{
+-    if (!temperature_c || !isfinite(resistance_ohms) ||
+-        resistance_ohms < 150.0 || resistance_ohms > 5000.0) {
+-        return false;
+-    }
+-
+-    const double r0 = ZTM_ADC_RTD_R0_OHMS;
+-    const double a = 3.9083e-3;
+-    const double b = -5.775e-7;
+-    const double c = -4.183e-12;
+-    const double ratio = resistance_ohms / r0;
+-    double temperature;
+-
+-    if (resistance_ohms >= r0) {
+-        double discriminant = a * a - 4.0 * b * (1.0 - ratio);
+-        if (discriminant < 0.0) {
+-            return false;
+-        }
+-        temperature = (-a + sqrt(discriminant)) / (2.0 * b);
+-    } else {
+-        temperature = (ratio - 1.0) / a;
+-        for (unsigned iteration = 0u; iteration < 12u; iteration++) {
+-            double t2 = temperature * temperature;
+-            double t3 = t2 * temperature;
+-            double calculated = 1.0 + a * temperature + b * t2 +
+-                                c * (temperature - 100.0) * t3;
+-            double derivative = a + 2.0 * b * temperature +
+-                                c * (4.0 * t3 - 300.0 * t2);
+-            if (fabs(derivative) < 1e-12) {
+-                return false;
+-            }
+-            double correction = (calculated - ratio) / derivative;
+-            temperature -= correction;
+-            if (fabs(correction) < 1e-9) {
+-                break;
+-            }
+-        }
+-    }
+-
+-    if (!isfinite(temperature) || temperature < -250.0 || temperature > 850.0) {
+-        return false;
+-    }
+-    *temperature_c = temperature;
+-    return true;
+-}
+-
+-bool ztm_adc_read_cold_junction(ztm_adc_rtd_sample_t *sample)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !sample || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ztm_adc_measure_cjc_unlocked(module, sample);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_read_rtd(uint8_t rtd_1based, ztm_adc_rtd_sample_t *sample)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !sample || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ztm_adc_measure_external_rtd_unlocked(module, rtd_1based, sample);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_read_all_rtds(ztm_adc_rtd_sample_t *cold_junction,
+-                            ztm_adc_rtd_sample_t samples[ZTM_ADC_RTD_COUNT])
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !cold_junction || !samples || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    bool ok = ztm_adc_measure_cjc_unlocked(module, cold_junction);
+-    for (uint8_t rtd = 1u; ok && rtd <= ZTM_ADC_RTD_COUNT; rtd++) {
+-        ok = ztm_adc_measure_external_rtd_unlocked(module,
+-                                                   rtd,
+-                                                   &samples[rtd - 1u]);
+-    }
+-    (void)ad7124_disable_iouts(&module->adc);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_set_thermocouple_type(uint8_t tc_1based, thermocouple_type_t type)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || tc_1based < 1u || tc_1based > ZTM_ADC_TC_COUNT ||
+-        type < THERMOCOUPLE_TYPE_B || type >= THERMOCOUPLE_TYPE_COUNT ||
+-        !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    module->thermocouple_types[tc_1based - 1u] = type;
+-    ztm_adc_unlock(module);
+-    return true;
+-}
+-
+-bool ztm_adc_get_thermocouple_type(uint8_t tc_1based, thermocouple_type_t *type)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !type || tc_1based < 1u ||
+-        tc_1based > ZTM_ADC_TC_COUNT || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    *type = module->thermocouple_types[tc_1based - 1u];
+-    ztm_adc_unlock(module);
+-    return true;
+-}
+-
+-bool ztm_adc_read_thermocouple(uint8_t tc_1based, ztm_adc_tc_sample_t *sample)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !sample || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    ztm_adc_rtd_sample_t cjc;
+-    bool cjc_read_ok = ztm_adc_measure_cjc_unlocked(module, &cjc);
+-    bool cjc_valid = cjc_read_ok && cjc.status == ZTM_ADC_SENSOR_OK;
+-    bool ok = ztm_adc_measure_tc_unlocked(module,
+-                                           tc_1based,
+-                                           cjc_valid,
+-                                           cjc_valid ? cjc.temperature_c : NAN,
+-                                           sample);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_read_all_thermocouples(ztm_adc_tc_sample_t samples[ZTM_ADC_TC_COUNT])
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !samples || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    ztm_adc_rtd_sample_t cjc;
+-    bool cjc_read_ok = ztm_adc_measure_cjc_unlocked(module, &cjc);
+-    bool cjc_valid = cjc_read_ok && cjc.status == ZTM_ADC_SENSOR_OK;
+-    bool ok = true;
+-    for (uint8_t tc = 1u; ok && tc <= ZTM_ADC_TC_COUNT; tc++) {
+-        ok = ztm_adc_measure_tc_unlocked(module,
+-                                         tc,
+-                                         cjc_valid,
+-                                         cjc_valid ? cjc.temperature_c : NAN,
+-                                         &samples[tc - 1u]);
+-    }
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_read_all(ztm_adc_rtd_sample_t *cold_junction,
+-                      ztm_adc_rtd_sample_t rtds[ZTM_ADC_RTD_COUNT],
+-                      ztm_adc_tc_sample_t thermocouples[ZTM_ADC_TC_COUNT])
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !cold_junction || !rtds || !thermocouples ||
+-        !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    bool ok = ztm_adc_measure_cjc_unlocked(module, cold_junction);
+-    for (uint8_t rtd = 1u; ok && rtd <= ZTM_ADC_RTD_COUNT; rtd++) {
+-        ok = ztm_adc_measure_external_rtd_unlocked(module,
+-                                                   rtd,
+-                                                   &rtds[rtd - 1u]);
+-    }
+-    bool cjc_valid = cold_junction->status == ZTM_ADC_SENSOR_OK;
+-    for (uint8_t tc = 1u; ok && tc <= ZTM_ADC_TC_COUNT; tc++) {
+-        ok = ztm_adc_measure_tc_unlocked(module,
+-                                         tc,
+-                                         cjc_valid,
+-                                         cjc_valid ? cold_junction->temperature_c : NAN,
+-                                         &thermocouples[tc - 1u]);
+-    }
+-    (void)ad7124_disable_iouts(&module->adc);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_read_error_status(uint8_t *status, uint32_t *error_mask)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !status || !error_mask || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    bool ok = ad7124_read_status(&module->adc, status) &&
+-              ad7124_read_error(&module->adc, error_mask);
+-    if (ok) {
+-        module->last_error_mask = *error_mask;
+-    } else {
+-        module->communication_error_count++;
+-    }
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_verify_configuration(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ztm_adc_verify_configuration_unlocked(module, true);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_read_register(uint8_t address, uint8_t width_bytes, uint32_t *value)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !value || address > 0x38u ||
+-        width_bytes < 1u || width_bytes > 3u || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-
+-    bool ok = false;
+-    if (width_bytes == 1u) {
+-        uint8_t v = 0u;
+-        ok = ad7124_read_reg8(&module->adc, (ad7124_reg_t)address, &v);
+-        *value = v;
+-    } else if (width_bytes == 2u) {
+-        uint16_t v = 0u;
+-        ok = ad7124_read_reg16(&module->adc, (ad7124_reg_t)address, &v);
+-        *value = v;
+-    } else {
+-        ok = ad7124_read_reg24(&module->adc, (ad7124_reg_t)address, value);
+-    }
+-
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-static bool ztm_adc_calibrate_tc_unlocked(ztm_adc_t *module)
+-{
+-    bool ok = ad7124_disable_iouts(&module->adc) &&
+-              ad7124_calibrate_channel(&module->adc,
+-                                        ZTM_ADC_CHANNEL_TC_FIRST,
+-                                        true,
+-                                        true,
+-                                        ZTM_ADC_CONVERSION_TIMEOUT_US);
+-    (void)ad7124_disable_all_channels(&module->adc);
+-    return ok;
+-}
+-
+-static bool ztm_adc_calibrate_rtd_unlocked(ztm_adc_t *module)
+-{
+-    bool ok = ad7124_set_iout(&module->adc,
+-                              module->rtd_excitation,
+-                              ZTM_ADC_AIN_CJC,
+-                              AD7124_IOUT_OFF,
+-                              0u,
+-                              false);
+-    if (ok) {
+-        busy_wait_us_32(ZTM_ADC_IOUT_SETTLE_US);
+-        ok = ad7124_calibrate_channel(&module->adc,
+-                                      ZTM_ADC_CHANNEL_CJC,
+-                                      true,
+-                                      true,
+-                                      ZTM_ADC_CONVERSION_TIMEOUT_US);
+-    }
+-    if (!ad7124_disable_iouts(&module->adc)) {
+-        ok = false;
+-    }
+-    (void)ad7124_disable_all_channels(&module->adc);
+-    return ok;
+-}
+-
+-bool ztm_adc_calibrate_tc_setup(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ztm_adc_calibrate_tc_unlocked(module);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_calibrate_rtd_setup(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ztm_adc_calibrate_rtd_unlocked(module);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_calibrate_all(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ztm_adc_calibrate_tc_unlocked(module) &&
+-              ztm_adc_calibrate_rtd_unlocked(module);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_iout_off(void)
+-{
+-    ztm_adc_t *module = &ztm_adc_1;
+-    if (!module->ready || !ztm_adc_try_lock(module)) {
+-        return false;
+-    }
+-    bool ok = ad7124_disable_iouts(&module->adc);
+-    ztm_adc_unlock(module);
+-    return ok;
+-}
+-
+-bool ztm_adc_get_last_measurement(ztm_adc_measure_diag_t *diag)
+-{
+-    if (!diag) {
+-        return false;
+-    }
+-    *diag = ztm_adc_1.last_measurement;
+-    return true;
+-}
+-
+-bool ztm_adc_read_test(ztm_adc_t *module)
+-{
+-    if (!module || module != &ztm_adc_1) {
+-        return false;
+-    }
+-
+-    ztm_adc_rtd_sample_t sample;
+-    if (!ztm_adc_read_cold_junction(&sample)) {
+-        return false;
+-    }
+-
+-    if (sample.status == ZTM_ADC_SENSOR_DISCONNECTED) {
+-        log_printf("CJC Pt1000: raw=0x%06lX DISCONNECTED\n",
+-                   (unsigned long)sample.raw_code);
+-    } else if (sample.status == ZTM_ADC_SENSOR_OUT_OF_RANGE) {
+-        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm OUT OF RANGE\n",
+-                   (unsigned long)sample.raw_code,
+-                   sample.resistance_ohms);
+-    } else {
+-        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm T=%.3f C\n",
+-                   (unsigned long)sample.raw_code,
+-                   sample.resistance_ohms,
+-                   sample.temperature_c);
+-    }
+-    return true;
+-}
+diff --git ./modules/ztm_adc.h ./modules/ztm_adc.h
+deleted file mode 100644
+index 565ad54..0000000
+--- ./modules/ztm_adc.h
++++ /dev/null
+@@ -1,174 +0,0 @@
+-#pragma once
+-
+-#include <stdbool.h>
+-#include <stddef.h>
+-#include <stdint.h>
+-
+-#include "drivers/ad7124.h"
+-#include "drivers/thermocouple.h"
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-#define ZTM_ADC_TC_COUNT                 3u
+-#define ZTM_ADC_RTD_COUNT                8u
+-#define ZTM_ADC_SENSOR_CHANNEL_COUNT    12u
+-
+-/* AD7124 channel/setup allocation owned by this module. */
+-#define ZTM_ADC_SETUP_TC                 0u
+-#define ZTM_ADC_SETUP_RTD                1u
+-#define ZTM_ADC_CHANNEL_TC_FIRST         0u
+-#define ZTM_ADC_CHANNEL_CJC              3u
+-#define ZTM_ADC_CHANNEL_RTD_FIRST        4u
+-
+-/* Analogue board topology. */
+-#define ZTM_ADC_AIN_CJC                  6u
+-#define ZTM_ADC_AIN_RTD_FIRST            7u
+-#define ZTM_ADC_AIN_RTD_RETURN          15u
+-
+-/*
+- * Existing board design values. Keep these in the module layer so a board
+- * revision can change them without changing the generic AD7124 driver.
+- */
+-#define ZTM_ADC_RTD_R0_OHMS           1000.0
+-#define ZTM_ADC_RREF_OHMS             2000.0
+-#define ZTM_ADC_INTERNAL_REF_VOLTS       2.5
+-#define ZTM_ADC_RTD_EXCITATION        AD7124_IOUT_500UA
+-#define ZTM_ADC_FILTER_FS              200u
+-#define ZTM_ADC_CONVERSION_TIMEOUT_US 2000000u
+-#define ZTM_ADC_IOUT_SETTLE_US          2000u
+-
+-/* VBIAS is applied to the negative input of each floating thermocouple. */
+-#define ZTM_ADC_TC_VBIAS_MASK ((uint16_t)((1u << 1) | (1u << 3) | (1u << 5)))
+-
+-typedef enum {
+-    ZTM_ADC_SENSOR_OK = 0,
+-    ZTM_ADC_SENSOR_DISCONNECTED,
+-    ZTM_ADC_SENSOR_CJC_UNAVAILABLE,
+-    ZTM_ADC_SENSOR_OUT_OF_RANGE,
+-} ztm_adc_sensor_status_t;
+-
+-typedef struct {
+-    bool valid;                 /* ADC transaction completed. */
+-    ztm_adc_sensor_status_t status;
+-    uint8_t logical_index;      /* CJC = 0; external RTDs = 1..8. */
+-    uint8_t ad7124_channel;
+-    uint8_t ain_positive;
+-    uint32_t raw_code;
+-    double resistance_ohms;
+-    double temperature_c;
+-} ztm_adc_rtd_sample_t;
+-
+-typedef struct {
+-    bool valid;                 /* ADC transaction completed. */
+-    ztm_adc_sensor_status_t status;
+-    uint8_t logical_index;      /* Thermocouple = 1..3. */
+-    uint8_t ad7124_channel;
+-    uint8_t ain_positive;
+-    uint8_t ain_negative;
+-    uint32_t raw_code;
+-    thermocouple_type_t type;
+-    double differential_mv;
+-    bool cold_junction_valid;
+-    double cold_junction_c;
+-    double compensated_mv;
+-    double temperature_c;
+-} ztm_adc_tc_sample_t;
+-
+-
+-typedef enum {
+-    ZTM_ADC_MEASURE_NONE = 0,
+-    ZTM_ADC_MEASURE_IOUT_ENABLE,
+-    ZTM_ADC_MEASURE_CHANNEL_ENABLE,
+-    ZTM_ADC_MEASURE_MODE_START,
+-    ZTM_ADC_MEASURE_MODE_VERIFY,
+-    ZTM_ADC_MEASURE_READY_TIMEOUT,
+-    ZTM_ADC_MEASURE_DATA_READ,
+-    ZTM_ADC_MEASURE_CHANNEL_MISMATCH,
+-    ZTM_ADC_MEASURE_STANDBY,
+-    ZTM_ADC_MEASURE_CHANNEL_DISABLE,
+-    ZTM_ADC_MEASURE_IOUT_DISABLE,
+-    ZTM_ADC_MEASURE_SENSOR_RANGE,
+-    ZTM_ADC_MEASURE_OK,
+-} ztm_adc_measure_stage_t;
+-
+-typedef struct {
+-    ztm_adc_measure_stage_t stage;
+-    uint8_t expected_channel;
+-    uint8_t active_channel;
+-    uint8_t status_before;
+-    uint8_t status_ready;
+-    uint8_t status_after_cleanup;
+-    uint16_t channel_register;
+-    uint16_t adc_control_after_start;
+-    uint16_t adc_control_at_result;
+-    uint16_t adc_control_after_cleanup;
+-    uint32_t io_control_1;
+-    uint32_t filter_register;
+-    uint32_t elapsed_us;
+-    uint32_t ready_polls;
+-    uint32_t raw_code;
+-    uint32_t error_mask;
+-    double resistance_ohms;
+-} ztm_adc_measure_diag_t;
+-
+-typedef struct {
+-    ad7124_dev_t adc;
+-    bool ready;
+-    volatile bool busy;
+-    uint8_t device_id;
+-
+-    double reference_resistor_ohms;
+-    ad7124_iout_val_t rtd_excitation;
+-    thermocouple_type_t thermocouple_types[ZTM_ADC_TC_COUNT];
+-
+-    uint32_t last_error_mask;
+-    uint32_t error_event_count;
+-    uint32_t communication_error_count;
+-    uint32_t configuration_error_count;
+-    bool configuration_verified;
+-    bool por_fault_active;
+-    ztm_adc_measure_diag_t last_measurement;
+-} ztm_adc_t;
+-
+-extern ztm_adc_t ztm_adc_1;
+-
+-int ztm_adc_init(void *ctx, void *spi, int8_t cs_pin, int8_t en_pin);
+-int ztm_adc_poll(void);
+-int ztm_adc_deinit(void);
+-bool ztm_adc_ready(void);
+-
+-bool ztm_adc_read_cold_junction(ztm_adc_rtd_sample_t *sample);
+-bool ztm_adc_read_rtd(uint8_t rtd_1based, ztm_adc_rtd_sample_t *sample);
+-bool ztm_adc_read_all_rtds(ztm_adc_rtd_sample_t *cold_junction,
+-                            ztm_adc_rtd_sample_t samples[ZTM_ADC_RTD_COUNT]);
+-
+-bool ztm_adc_set_thermocouple_type(uint8_t tc_1based, thermocouple_type_t type);
+-bool ztm_adc_get_thermocouple_type(uint8_t tc_1based, thermocouple_type_t *type);
+-bool ztm_adc_read_thermocouple(uint8_t tc_1based, ztm_adc_tc_sample_t *sample);
+-bool ztm_adc_read_all_thermocouples(ztm_adc_tc_sample_t samples[ZTM_ADC_TC_COUNT]);
+-
+-bool ztm_adc_read_all(ztm_adc_rtd_sample_t *cold_junction,
+-                      ztm_adc_rtd_sample_t rtds[ZTM_ADC_RTD_COUNT],
+-                      ztm_adc_tc_sample_t thermocouples[ZTM_ADC_TC_COUNT]);
+-
+-bool ztm_adc_read_error_status(uint8_t *status, uint32_t *error_mask);
+-bool ztm_adc_verify_configuration(void);
+-bool ztm_adc_read_register(uint8_t address, uint8_t width_bytes, uint32_t *value);
+-bool ztm_adc_calibrate_tc_setup(void);
+-bool ztm_adc_calibrate_rtd_setup(void);
+-bool ztm_adc_calibrate_all(void);
+-bool ztm_adc_iout_off(void);
+-bool ztm_adc_get_last_measurement(ztm_adc_measure_diag_t *diag);
+-
+-/* Compatibility with the original one-channel debugging hook. */
+-bool ztm_adc_read_test(ztm_adc_t *module);
+-
+-/* Public conversion helpers are useful to host tests and future sensing code. */
+-bool ztm_adc_pt1000_temperature(double resistance_ohms, double *temperature_c);
+-double ztm_adc_rtd_resistance_from_code(uint32_t code, double reference_resistor_ohms);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+diff --git ./sensing.c ./sensing.c
+index f03724e..5a27f77 100644
+--- ./sensing.c
++++ ./sensing.c
+@@ -1,5 +1,5 @@
+ #include "ztmb/ztmb.h"
+-#include "modules/ztm_adc.h"
++#include "zaptronics/modules/ztm_adc.h"
+ #include "sensing.h"
+ 
+ static module_entry_t *g_adc_module;
+diff --git ./zap.ps1 ./zap.ps1
+index 4536b3b..78fc828 100644
+--- ./zap.ps1
++++ ./zap.ps1
+@@ -430,7 +430,7 @@ function Write-NewConfig {
+         '  zapee:',
+         '    type: git',
+         '    uri: git@github.com:Zaptronics/zap-ee.git',
+-        '    version: v0.3.0',
++        '    version: v0.4.0',
+         '    override_var: ZAPEE_SOURCE',
+         '    zephyr_module: true',
+         '    components:',
+diff --git ./zap.yml ./zap.yml
+index 189ed6a..602593a 100644
+--- ./zap.yml
++++ ./zap.yml
+@@ -13,8 +13,9 @@ dependencies:
+   zapee:
+     type: git
+     uri: git@github.com:Zaptronics/zap-ee.git
+-    version: v0.3.0
++    version: v0.4.0
+     override_var: ZAPEE_SOURCE
+     zephyr_module: true
+     components:
+       - zap::ztm_pwm
++      - zap::ztm_adc
+diff --git ./ztmb/modules.c ./ztmb/modules.c
+index 7e259db..155c6a6 100644
+--- ./ztmb/modules.c
++++ ./ztmb/modules.c
+@@ -6,7 +6,7 @@
+ #include "ztmb/cs_lines.h"
+ #include "ztmb/io_exp.h"
+ 
+-#include "modules/ztm_adc.h"
++#include "ztmb/ztm_adc_adapter.h"
+ #include "modules/ztm_psu_hv.h"
+ #include "modules/ztm_psu_tec.h"
+ #include "modules/ztm_pwm.h"
+@@ -16,13 +16,13 @@ static module_entry_t g_modules[] = {
+     {
+         .short_name = "ztm_adc",
+         .long_name  = "AD7124-8 temperature ADC (3 TC, CJC Pt1000, 8 RTD)",
+-        .init       = ztm_adc_init,
++        .init       = ztmb_ztm_adc_init,
+         .bus_ctx    = (void *)ZTMB_SPI1_PORT,
+         .mod_inst   = &ztm_adc_1,
+         .addr       = ZTMB_ADC_CS_2,
+         .en_pin     = EX_NONE,
+-        .poll       = ztm_adc_poll,
+-        .deinit     = ztm_adc_deinit,
++        .poll       = ztmb_ztm_adc_poll,
++        .deinit     = ztmb_ztm_adc_deinit,
+     },
+     {
+         .short_name = "ztm_psu_hv",
+diff --git ./ztmb/zap_adapter.c ./ztmb/zap_adapter.c
+index 3e9be00..ffe93b5 100644
+--- ./ztmb/zap_adapter.c
++++ ./ztmb/zap_adapter.c
+@@ -1,7 +1,8 @@
+ #include "ztmb/zap_adapter.h"
+ 
++#include <string.h>
++
+ #include "pico/stdlib.h"
+-#include "ztmb/bus.h"
+ #include "ztmb/io_exp.h"
+ 
+ static int make_port(ztmb_zap_i2c_t *adapter,
+@@ -19,11 +20,11 @@ static int make_port(ztmb_zap_i2c_t *adapter,
+     return bus_i2c_init(port, adapter->i2c, address_7bit, EX_NONE, &config) ? 0 : -1;
+ }
+ 
+-static int adapter_write(void *context,
+-                         uint8_t address_7bit,
+-                         const uint8_t *data,
+-                         size_t len,
+-                         uint32_t timeout_us)
++static int adapter_i2c_write(void *context,
++                             uint8_t address_7bit,
++                             const uint8_t *data,
++                             size_t len,
++                             uint32_t timeout_us)
+ {
+     ztmb_zap_i2c_t *adapter = (ztmb_zap_i2c_t *)context;
+     bus_i2c_t port = {0};
+@@ -33,13 +34,13 @@ static int adapter_write(void *context,
+     return bus_i2c_write_raw(&port, data, len) ? 0 : -1;
+ }
+ 
+-static int adapter_write_read(void *context,
+-                              uint8_t address_7bit,
+-                              const uint8_t *write_data,
+-                              size_t write_len,
+-                              uint8_t *read_data,
+-                              size_t read_len,
+-                              uint32_t timeout_us)
++static int adapter_i2c_write_read(void *context,
++                                  uint8_t address_7bit,
++                                  const uint8_t *write_data,
++                                  size_t write_len,
++                                  uint8_t *read_data,
++                                  size_t read_len,
++                                  uint32_t timeout_us)
+ {
+     ztmb_zap_i2c_t *adapter = (ztmb_zap_i2c_t *)context;
+     bus_i2c_t port = {0};
+@@ -49,7 +50,7 @@ static int adapter_write_read(void *context,
+     return bus_i2c_write_read_raw(&port, write_data, write_len, read_data, read_len) ? 0 : -1;
+ }
+ 
+-static int adapter_probe(void *context, uint8_t address_7bit, uint32_t timeout_us)
++static int adapter_i2c_probe(void *context, uint8_t address_7bit, uint32_t timeout_us)
+ {
+     ztmb_zap_i2c_t *adapter = (ztmb_zap_i2c_t *)context;
+     bus_i2c_t port = {0};
+@@ -60,22 +61,112 @@ static int adapter_probe(void *context, uint8_t address_7bit, uint32_t timeout_u
+ }
+ 
+ static const zap_i2c_bus_ops_t g_i2c_ops = {
+-    .write = adapter_write,
+-    .write_read = adapter_write_read,
+-    .probe = adapter_probe,
++    .write = adapter_i2c_write,
++    .write_read = adapter_i2c_write_read,
++    .probe = adapter_i2c_probe,
+     .lock = NULL,
+     .unlock = NULL,
+ };
+ 
++static int adapter_spi_begin(void *context, uint32_t timeout_us)
++{
++    (void)timeout_us;
++    ztmb_zap_spi_t *adapter = (ztmb_zap_spi_t *)context;
++    return adapter && bus_spi_begin(&adapter->bus) ? ZAP_SPI_OK : ZAP_SPI_E_IO;
++}
++
++static int adapter_spi_transfer(void *context,
++                                const uint8_t *tx,
++                                uint8_t *rx,
++                                size_t len,
++                                uint8_t read_fill,
++                                uint32_t timeout_us)
++{
++    (void)timeout_us;
++    ztmb_zap_spi_t *adapter = (ztmb_zap_spi_t *)context;
++    if (!adapter || len == 0u || (!tx && !rx)) {
++        return ZAP_SPI_E_BAD_ARG;
++    }
++
++    if (tx || read_fill == 0u) {
++        return bus_spi_transfer(&adapter->bus, tx, rx, len) ? ZAP_SPI_OK : ZAP_SPI_E_IO;
++    }
++
++    uint8_t fill[32];
++    memset(fill, read_fill, sizeof(fill));
++    size_t offset = 0u;
++    while (offset < len) {
++        size_t chunk = len - offset;
++        if (chunk > sizeof(fill)) {
++            chunk = sizeof(fill);
++        }
++        if (!bus_spi_transfer(&adapter->bus,
++                              fill,
++                              rx ? &rx[offset] : NULL,
++                              chunk)) {
++            return ZAP_SPI_E_IO;
++        }
++        offset += chunk;
++    }
++    return ZAP_SPI_OK;
++}
++
++static int adapter_spi_end(void *context)
++{
++    ztmb_zap_spi_t *adapter = (ztmb_zap_spi_t *)context;
++    return adapter && bus_spi_end(&adapter->bus) ? ZAP_SPI_OK : ZAP_SPI_E_IO;
++}
++
++static const zap_spi_device_ops_t g_spi_ops = {
++    .begin = adapter_spi_begin,
++    .transfer = adapter_spi_transfer,
++    .end = adapter_spi_end,
++};
++
++static int adapter_lock_acquire(void *context, uint32_t timeout_us)
++{
++    ztmb_zap_lock_t *adapter = (ztmb_zap_lock_t *)context;
++    if (!adapter) {
++        return -1;
++    }
++    if (timeout_us == 0u) {
++        uint32_t owner = 0u;
++        return mutex_try_enter(&adapter->mutex, &owner) ? 0 : -1;
++    }
++    return mutex_enter_timeout_us(&adapter->mutex, timeout_us) ? 0 : -1;
++}
++
++static void adapter_lock_release(void *context)
++{
++    ztmb_zap_lock_t *adapter = (ztmb_zap_lock_t *)context;
++    if (adapter) {
++        mutex_exit(&adapter->mutex);
++    }
++}
++
+ static void adapter_delay_ms(void *context, uint32_t delay_ms)
+ {
+     (void)context;
+     busy_wait_ms(delay_ms);
+ }
+ 
++static void adapter_delay_us(void *context, uint32_t delay_us)
++{
++    (void)context;
++    busy_wait_us_32(delay_us);
++}
++
++static uint64_t adapter_now_us(void *context)
++{
++    (void)context;
++    return time_us_64();
++}
++
+ static const zap_time_t g_time = {
+     .context = NULL,
+     .delay_ms = adapter_delay_ms,
++    .delay_us = adapter_delay_us,
++    .now_us = adapter_now_us,
+ };
+ 
+ bool ztmb_zap_i2c_init(ztmb_zap_i2c_t *adapter,
+@@ -94,6 +185,46 @@ bool ztmb_zap_i2c_init(ztmb_zap_i2c_t *adapter,
+     return true;
+ }
+ 
++bool ztmb_zap_spi_init(ztmb_zap_spi_t *adapter,
++                       spi_inst_t *spi,
++                       uint cs_mux_id,
++                       int8_t en_mux_id,
++                       const bus_spi_config_t *config,
++                       uint32_t timeout_us,
++                       uint8_t read_fill)
++{
++    if (!adapter || !bus_spi_init(&adapter->bus, spi, cs_mux_id, en_mux_id, config)) {
++        return false;
++    }
++    adapter->device.context = adapter;
++    adapter->device.ops = &g_spi_ops;
++    adapter->device.timeout_us = timeout_us;
++    adapter->device.read_fill = read_fill;
++    return true;
++}
++
++const zap_spi_device_t *ztmb_zap_spi_device(const ztmb_zap_spi_t *adapter)
++{
++    return adapter ? &adapter->device : NULL;
++}
++
++void ztmb_zap_lock_init(ztmb_zap_lock_t *adapter, uint32_t timeout_us)
++{
++    if (!adapter) {
++        return;
++    }
++    mutex_init(&adapter->mutex);
++    adapter->lock.context = adapter;
++    adapter->lock.acquire = adapter_lock_acquire;
++    adapter->lock.release = adapter_lock_release;
++    adapter->lock.timeout_us = timeout_us;
++}
++
++const zap_lock_t *ztmb_zap_lock(const ztmb_zap_lock_t *adapter)
++{
++    return adapter ? &adapter->lock : NULL;
++}
++
+ const zap_time_t *ztmb_zap_time(void)
+ {
+     return &g_time;
+diff --git ./ztmb/zap_adapter.h ./ztmb/zap_adapter.h
+index 1167b97..7181a5d 100644
+--- ./ztmb/zap_adapter.h
++++ ./ztmb/zap_adapter.h
+@@ -4,8 +4,13 @@
+ #include <stdint.h>
+ 
+ #include "hardware/i2c.h"
++#include "hardware/spi.h"
++#include "pico/sync.h"
+ #include "zaptronics/platform/i2c.h"
++#include "zaptronics/platform/lock.h"
++#include "zaptronics/platform/spi.h"
+ #include "zaptronics/platform/time.h"
++#include "ztmb/bus.h"
+ 
+ typedef struct {
+     i2c_inst_t *i2c;
+@@ -13,8 +18,31 @@ typedef struct {
+     zap_i2c_bus_t bus;
+ } ztmb_zap_i2c_t;
+ 
++typedef struct {
++    bus_spi_t bus;
++    zap_spi_device_t device;
++} ztmb_zap_spi_t;
++
++typedef struct {
++    mutex_t mutex;
++    zap_lock_t lock;
++} ztmb_zap_lock_t;
++
+ bool ztmb_zap_i2c_init(ztmb_zap_i2c_t *adapter,
+                        i2c_inst_t *i2c,
+                        uint32_t baud_hz,
+                        uint32_t timeout_us);
++
++bool ztmb_zap_spi_init(ztmb_zap_spi_t *adapter,
++                       spi_inst_t *spi,
++                       uint cs_mux_id,
++                       int8_t en_mux_id,
++                       const bus_spi_config_t *config,
++                       uint32_t timeout_us,
++                       uint8_t read_fill);
++const zap_spi_device_t *ztmb_zap_spi_device(const ztmb_zap_spi_t *adapter);
++
++void ztmb_zap_lock_init(ztmb_zap_lock_t *adapter, uint32_t timeout_us);
++const zap_lock_t *ztmb_zap_lock(const ztmb_zap_lock_t *adapter);
++
+ const zap_time_t *ztmb_zap_time(void);
+diff --git ./ztmb/ztm_adc_adapter.c ./ztmb/ztm_adc_adapter.c
+new file mode 100644
+index 0000000..798a2ea
+--- /dev/null
++++ ./ztmb/ztm_adc_adapter.c
+@@ -0,0 +1,152 @@
++#include "ztmb/ztm_adc_adapter.h"
++
++#include "hardware/spi.h"
++#include "ztmb/log.h"
++#include "ztmb/zap_adapter.h"
++
++ztm_adc_t ztm_adc_1;
++
++static ztmb_zap_spi_t g_adc_spi;
++static ztmb_zap_lock_t g_adc_lock;
++
++static void log_error_bit(uint32_t mask, const char *message)
++{
++    if (mask != 0u) {
++        log_printf("ERROR: AD7124 %s\n", message);
++    }
++}
++
++static void log_error_mask(uint32_t errors)
++{
++    log_error_bit(errors & AD7124_ERROR_LDO_CAP, "LDO Capacitor Fault");
++    log_error_bit(errors & AD7124_ERROR_ADC_CAL, "Calibration Fault");
++    log_error_bit(errors & AD7124_ERROR_ADC_CONV, "Conversion Fault");
++    log_error_bit(errors & AD7124_ERROR_ADC_SAT, "Input Saturation");
++    log_error_bit(errors & AD7124_ERROR_AINP_OV, "AIN+ Overvoltage");
++    log_error_bit(errors & AD7124_ERROR_AINP_UV, "AIN+ Undervoltage");
++    log_error_bit(errors & AD7124_ERROR_AINM_OV, "AIN- Overvoltage");
++    log_error_bit(errors & AD7124_ERROR_AINM_UV, "AIN- Undervoltage");
++    log_error_bit(errors & AD7124_ERROR_REF_DET, "Reference Missing/Low");
++    log_error_bit(errors & AD7124_ERROR_DLDO_PSM, "Digital LDO Fault");
++    log_error_bit(errors & AD7124_ERROR_ALDO_PSM, "Analog LDO Fault");
++    log_error_bit(errors & AD7124_ERROR_SPI_IGNORE, "SPI Command Ignored");
++    log_error_bit(errors & AD7124_ERROR_SPI_SCLK_CNT, "SPI Clock Count Fault");
++    log_error_bit(errors & AD7124_ERROR_SPI_READ, "Invalid SPI Read");
++    log_error_bit(errors & AD7124_ERROR_SPI_WRITE, "Invalid SPI Write");
++    log_error_bit(errors & AD7124_ERROR_SPI_CRC, "SPI CRC Fault");
++    log_error_bit(errors & AD7124_ERROR_MM_CRC, "Register Memory CRC Fault");
++    log_error_bit(errors & AD7124_ERROR_ROM_CRC, "ROM CRC Fault");
++}
++
++static void adc_event(void *context, const ztm_adc_event_t *event)
++{
++    (void)context;
++    if (!event) {
++        return;
++    }
++
++    switch (event->type) {
++        case ZTM_ADC_EVENT_READY:
++            log_printf("AD7124-8 ready: ID=0x%02X, 3 TC + CJC Pt1000 + 8 RTD\n",
++                       ztm_adc_1.device_id);
++            break;
++        case ZTM_ADC_EVENT_UNEXPECTED_RESET:
++            log_printf("ERROR: AD7124 Unexpected Reset! status=0x%02X\n",
++                       event->status);
++            break;
++        case ZTM_ADC_EVENT_ADC_ERROR:
++            log_error_mask(event->error_mask);
++            break;
++        case ZTM_ADC_EVENT_COMMUNICATION_ERROR:
++            log_printf("ERROR: AD7124 communication failure\n");
++            break;
++        case ZTM_ADC_EVENT_CONFIGURATION_MISMATCH:
++            if (event->actual == UINT32_MAX) {
++                log_printf("ERROR: AD7124 failed to read reg 0x%02X during configuration verification\n",
++                           event->register_address);
++            } else {
++                log_printf("ERROR: AD7124 reg 0x%02X mismatch: expected 0x%06lX, read 0x%06lX\n",
++                           event->register_address,
++                           (unsigned long)event->expected,
++                           (unsigned long)event->actual);
++            }
++            break;
++        default:
++            break;
++    }
++}
++
++int ztmb_ztm_adc_init(void *ctx, void *spi, int8_t cs_pin, int8_t en_pin)
++{
++    if (!ctx || ctx != &ztm_adc_1 || !spi || cs_pin < 0) {
++        return -1;
++    }
++
++    const bus_spi_config_t spi_config = {
++        .baud_hz = 1000000u,
++        .data_bits = 8u,
++        .cpol = SPI_CPOL_1,
++        .cpha = SPI_CPHA_1,
++        .order = SPI_MSB_FIRST,
++        .cs_setup_us = 0u,
++        .cs_hold_us = 0u,
++        .cs_high_us = 1u,
++    };
++
++    if (!ztmb_zap_spi_init(&g_adc_spi,
++                           (spi_inst_t *)spi,
++                           (uint)cs_pin,
++                           en_pin,
++                           &spi_config,
++                           ZAP_SPI_DEFAULT_TIMEOUT_US,
++                           0u)) {
++        return -2;
++    }
++
++    ztmb_zap_lock_init(&g_adc_lock, ZTM_ADC_OPERATION_TIMEOUT_US);
++    const ztm_adc_config_t config = {
++        .spi = ztmb_zap_spi_device(&g_adc_spi),
++        .time = ztmb_zap_time(),
++        .lock = ztmb_zap_lock(&g_adc_lock),
++        .event_context = NULL,
++        .event = adc_event,
++    };
++    return ztm_adc_init(&ztm_adc_1, &config);
++}
++
++int ztmb_ztm_adc_poll(void)
++{
++    return ztm_adc_poll(&ztm_adc_1);
++}
++
++int ztmb_ztm_adc_deinit(void)
++{
++    return ztm_adc_deinit(&ztm_adc_1);
++}
++
++bool ztmb_ztm_adc_read_test(ztm_adc_t *module)
++{
++    if (!module || module != &ztm_adc_1) {
++        return false;
++    }
++
++    ztm_adc_rtd_sample_t sample;
++    if (!ztm_adc_read_cold_junction(module, &sample)) {
++        return false;
++    }
++
++    if (sample.status == ZTM_ADC_SENSOR_DISCONNECTED) {
++        log_printf("CJC Pt1000: raw=0x%06lX DISCONNECTED\n",
++                   (unsigned long)sample.raw_code);
++    } else if (sample.status == ZTM_ADC_SENSOR_OUT_OF_RANGE) {
++        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm OUT OF RANGE\n",
++                   (unsigned long)sample.raw_code,
++                   sample.resistance_ohms);
++    } else {
++        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm T=%.3f C\n",
++                   (unsigned long)sample.raw_code,
++                   sample.resistance_ohms,
++                   sample.temperature_c);
++    }
++    return true;
++}
+diff --git ./ztmb/ztm_adc_adapter.h ./ztmb/ztm_adc_adapter.h
+new file mode 100644
+index 0000000..0c5ba7a
+--- /dev/null
++++ ./ztmb/ztm_adc_adapter.h
+@@ -0,0 +1,18 @@
++#pragma once
++
++#include "zaptronics/modules/ztm_adc.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++extern ztm_adc_t ztm_adc_1;
++
++int ztmb_ztm_adc_init(void *ctx, void *spi, int8_t cs_pin, int8_t en_pin);
++int ztmb_ztm_adc_poll(void);
++int ztmb_ztm_adc_deinit(void);
++bool ztmb_ztm_adc_read_test(ztm_adc_t *module);
++
++#ifdef __cplusplus
++}
++#endif
