@@ -1,5 +1,5 @@
 # Zap dependency manifest
-schema: 1
+schema: 4
 
 project:
   environment: pico-sdk
@@ -9,11 +9,79 @@ project:
   deps_dir: deps
   adapters_dir: adapters
 
+build:
+  configuration: Release
+
+upload:
+  default: auto
+  order:
+    - bootsel
+    - picotool
+    - openocd
+  methods:
+    bootsel:
+      type: volume-copy
+      artifact: "{build_dir}/{target}.uf2"
+      volume_labels:
+        - RP2350
+        - RPI-RP2
+    picotool:
+      type: command
+      artifact: "{build_dir}/{target}.uf2"
+      executable: picotool
+      search:
+        - PATH
+        - "{pico_home}/picotool"
+      variables:
+        serial: env:ZAP_PICO_SERIAL
+      args:
+        - load
+        - -f
+        - -v
+        - -x
+        - "{artifact}"
+      optional_args:
+        serial:
+          - --ser
+          - "{serial}"
+    openocd:
+      type: command
+      artifact: "{build_dir}/{target}.elf"
+      executable: openocd
+      search:
+        - PATH
+        - "{pico_home}/openocd"
+      variables:
+        probe_serial: env:ZAP_PROBE_SERIAL
+        adapter_speed_khz: 5000
+      find:
+        scripts:
+          root: "{pico_home}/openocd"
+          file: rp2350.cfg
+          parent: 2
+      args:
+        - -s
+        - "{scripts}"
+        - -f
+        - interface/cmsis-dap.cfg
+        - "{?probe_serial}"
+        - -f
+        - target/rp2350.cfg
+        - -c
+        - "adapter speed {adapter_speed_khz}"
+        - -c
+        - "program \"{artifact}\" verify reset exit"
+      optional_args:
+        probe_serial:
+          - -c
+          - "adapter serial {probe_serial}"
+
 dependencies:
   zapee:
     type: git
-    uri: git@github.com:Zaptronics/zap-ee.git
-    version: v0.4.1
+    uri: "git@github.com:Zaptronics/zap-ee.git"
+    version: v0.5.0
+    commit: da66e4c900409e05e1f4d33517f8eeec067c8f9a
     override_var: ZAPEE_SOURCE
     zephyr_module: true
     components:

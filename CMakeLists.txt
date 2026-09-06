@@ -75,7 +75,7 @@ include(pico_sdk_import.cmake)
 
 project(Hub C CXX ASM)
 
-set(HUB_FIRMWARE_VERSION "0.2.26")
+set(HUB_FIRMWARE_VERSION "0.2.28")
 set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
 configure_file(
@@ -89,7 +89,7 @@ set(HUB_WIFI_SSID "" CACHE STRING "Wi-Fi SSID used by the Hub reference applicat
 set(HUB_WIFI_PASSWORD "" CACHE STRING "Wi-Fi password used by the Hub reference application")
 
 # Allow IDE/direct-CMake builds to use the same local environment variables
-# as build.ps1. Explicit -D cache values still take precedence.
+# as Zap. Explicit -D cache values still take precedence.
 if(NOT HUB_WIFI_SSID AND DEFINED ENV{ZAP_HUB_WIFI_SSID})
     set(HUB_WIFI_SSID "$ENV{ZAP_HUB_WIFI_SSID}"
         CACHE STRING "Wi-Fi SSID used by the Hub reference application" FORCE)
@@ -117,6 +117,8 @@ pico_sdk_init()
 # cmake/zap_deps.cmake is generated from it and remains ordinary CMake so the
 # helper is never mandatory for experienced users or CI systems.
 # ZAP MANAGED DEPENDENCIES BEGIN
+# Managed by zap. Zap may replace only text between this BEGIN/END pair.
+# User CMake outside this block is never rewritten by zap.
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/zap_deps.cmake")
 # ZAP MANAGED DEPENDENCIES END
 
@@ -219,6 +221,8 @@ target_compile_definitions(Hub PRIVATE
 #)
 
 # ZAP MANAGED TARGETS BEGIN
+# Managed by zap. Zap may replace only text between this BEGIN/END pair.
+# User CMake outside this block is never rewritten by zap.
 if(COMMAND zap_apply_dependencies)
     zap_apply_dependencies(Hub)
 endif()

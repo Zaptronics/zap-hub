@@ -2,3 +2,6 @@
 /build-*/
 /.cache/
 /deps/
+/zap.exe
+/zap
+*.patch
