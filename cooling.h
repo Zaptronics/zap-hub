@@ -27,7 +27,3 @@ bool cooling_tec_read(uint8_t channel_id, cooling_tec_status_t *status);
 bool cooling_tec_read_all(cooling_tec_status_t status[COOLING_TEC_COUNT]);
 bool cooling_tec_stop(uint8_t channel_id);
 bool cooling_tec_stop_all(void);
-
-/* Compatibility wrappers for the original single-channel test commands. */
-bool ztm_psu_tec_start(uint8_t value);
-bool ztm_psu_tec_stop(void);

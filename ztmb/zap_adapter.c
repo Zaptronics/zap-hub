@@ -123,6 +123,43 @@ static const zap_spi_device_ops_t g_spi_ops = {
     .end = adapter_spi_end,
 };
 
+static int adapter_framed_begin(void *context, uint32_t timeout_us)
+{
+    (void)timeout_us;
+    ztmb_zap_framed_spi_t *adapter = (ztmb_zap_framed_spi_t *)context;
+    return adapter && bus_spi_claim(&adapter->bus) ? ZAP_SPI_OK : ZAP_SPI_E_LOCK;
+}
+
+static int adapter_framed_frame(void *context,
+                                const uint8_t *tx,
+                                uint8_t *rx,
+                                size_t len,
+                                uint8_t read_fill,
+                                uint32_t timeout_us)
+{
+    (void)timeout_us;
+    ztmb_zap_framed_spi_t *adapter = (ztmb_zap_framed_spi_t *)context;
+    if (!adapter || len == 0u || (!tx && !rx)) return ZAP_SPI_E_BAD_ARG;
+    if (tx || read_fill == 0u)
+        return bus_spi_frame_locked(&adapter->bus, tx, rx, len) ? ZAP_SPI_OK : ZAP_SPI_E_IO;
+    uint8_t fill[32];
+    if (len > sizeof(fill)) return ZAP_SPI_E_UNSUPPORTED;
+    memset(fill, read_fill, len);
+    return bus_spi_frame_locked(&adapter->bus, fill, rx, len) ? ZAP_SPI_OK : ZAP_SPI_E_IO;
+}
+
+static int adapter_framed_end(void *context)
+{
+    ztmb_zap_framed_spi_t *adapter = (ztmb_zap_framed_spi_t *)context;
+    return adapter && bus_spi_release(&adapter->bus) ? ZAP_SPI_OK : ZAP_SPI_E_STATE;
+}
+
+static const zap_spi_framed_device_ops_t g_framed_spi_ops = {
+    .sequence_begin = adapter_framed_begin,
+    .frame = adapter_framed_frame,
+    .sequence_end = adapter_framed_end,
+};
+
 static int adapter_lock_acquire(void *context, uint32_t timeout_us)
 {
     ztmb_zap_lock_t *adapter = (ztmb_zap_lock_t *)context;
@@ -204,6 +241,27 @@ bool ztmb_zap_spi_init(ztmb_zap_spi_t *adapter,
 }
 
 const zap_spi_device_t *ztmb_zap_spi_device(const ztmb_zap_spi_t *adapter)
+{
+    return adapter ? &adapter->device : NULL;
+}
+
+bool ztmb_zap_framed_spi_init(ztmb_zap_framed_spi_t *adapter,
+                               spi_inst_t *spi,
+                               uint cs_mux_id,
+                               int8_t en_mux_id,
+                               const bus_spi_config_t *config,
+                               uint32_t timeout_us,
+                               uint8_t read_fill)
+{
+    if (!adapter || !bus_spi_init(&adapter->bus, spi, cs_mux_id, en_mux_id, config)) return false;
+    adapter->device.context = adapter;
+    adapter->device.ops = &g_framed_spi_ops;
+    adapter->device.timeout_us = timeout_us;
+    adapter->device.read_fill = read_fill;
+    return true;
+}
+
+const zap_spi_framed_device_t *ztmb_zap_framed_spi_device(const ztmb_zap_framed_spi_t *adapter)
 {
     return adapter ? &adapter->device : NULL;
 }

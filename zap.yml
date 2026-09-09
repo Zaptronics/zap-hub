@@ -1,5 +1,5 @@
 # Zap dependency manifest
-schema: 4
+schema: 5
 
 project:
   environment: pico-sdk
@@ -80,10 +80,11 @@ dependencies:
   zapee:
     type: git
     uri: "git@github.com:Zaptronics/zap-ee.git"
-    version: v0.5.0
-    commit: da66e4c900409e05e1f4d33517f8eeec067c8f9a
-    override_var: ZAPEE_SOURCE
+    version: v0.6.0
     zephyr_module: true
     components:
       - zap::ztm_pwm
       - zap::ztm_adc
+      - zap::ztm_stepper
+      - zap::ztm_psu_hv
+      - zap::ztm_psu_tec

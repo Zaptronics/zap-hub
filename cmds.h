@@ -9,13 +9,13 @@
 #include "ztmb/modules.h"
 #include "ztmb/io_exp.h"
 
-#include "modules/ztm_stepper.h"
-#include "modules/ztm_adc.h"
+#include "ztmb/ztm_stepper_adapter.h"
+#include "ztmb/ztm_adc_adapter.h"
 #include "cooling.h"
 #include "pumping.h"
 #include "ztmb/ztm_pwm_adapter.h"
-#include "modules/ztm_psu_hv.h"
-#include "modules/ztm_psu_tec.h"
+#include "ztmb/ztm_psu_hv_adapter.h"
+#include "ztmb/ztm_psu_tec_adapter.h"
 #include "firmware_version.h"
 
 /* =========================================================
@@ -121,31 +121,26 @@ static int cmd_stepper_info(int argc, char **argv, char *out, size_t out_len)
     (void)out;
     (void)out_len;
 
-    const ztm_stepper_t *module = &ztm_stepper_1;
-    console_printf("\r\nStepper module: %s\r\n", ztm6470_ready() ? "READY" : "NOT READY");
-    console_printf("  SPI: %u Hz, %u-bit, mode %u, CS line %u\r\n",
-                   (unsigned)module->spi_bus.config.baud_hz,
-                   (unsigned)module->spi_bus.config.data_bits,
-                   (unsigned)((module->spi_bus.config.cpol ? 2u : 0u) |
-                              (module->spi_bus.config.cpha ? 1u : 0u)),
-                   (unsigned)module->spi_bus.cs_mux_id);
-    console_printf("  Chain: %u slots, %u bytes/frame, finalized=%s\r\n",
-                   (unsigned)module->chain.slot_count,
-                   (unsigned)module->chain.total_frame_bytes,
-                   module->chain.finalized ? "yes" : "no");
+    const bus_spi_t *bus = ztmb_stepper_bus();
+    console_printf("\r\nStepper module: %s\r\n", ztm_stepper_ready(&ztm_stepper_1) ? "READY" : "NOT READY");
+    if (bus) {
+        console_printf("  SPI: %u Hz, %u-bit, mode %u, CS line %u\r\n",
+                       (unsigned)bus->config.baud_hz,
+                       (unsigned)bus->config.data_bits,
+                       (unsigned)((bus->config.cpol ? 2u : 0u) |
+                                  (bus->config.cpha ? 1u : 0u)),
+                       (unsigned)bus->cs_mux_id);
+    }
+    console_printf("  Chain: %u L6470 slots, %u bytes/frame; logical motor 1 is nearest to controller\r\n",
+                   (unsigned)ZTM_STEPPER_DRIVER_COUNT,
+                   (unsigned)ZTM_STEPPER_DRIVER_COUNT);
     console_printf("  Active motors: 1..%u; motor %u is unused and held in hard HiZ\r\n",
                    (unsigned)ZTM_STEPPER_ACTIVE_DRIVER_COUNT,
                    (unsigned)ZTM_STEPPER_UNUSED_DRIVER_ID);
-
-    for (size_t i = 0; i < module->chain.slot_count; i++) {
-        const bus_spi_chain_slot_t *slot = module->chain.slots[i];
-        if (slot) {
-            console_printf("    motor %u: logical=%u wire_offset=%u frame=%u byte(s)\r\n",
-                           (unsigned)(i + 1u),
-                           (unsigned)slot->logical_index,
-                           (unsigned)slot->wire_offset,
-                           (unsigned)slot->config.frame_bytes);
-        }
+    for (size_t i = 0; i < ZTM_STEPPER_DRIVER_COUNT; i++) {
+        console_printf("    motor %u: wire_offset=%u frame=1 byte\r\n",
+                       (unsigned)(i + 1u),
+                       (unsigned)(ZTM_STEPPER_DRIVER_COUNT - 1u - i));
     }
     return 0;
 }
@@ -163,7 +158,7 @@ static int cmd_stepper_nop(int argc, char **argv, char *out, size_t out_len)
 
     for (uint32_t pass = 0; pass < count; pass++) {
         uint8_t responses[ZTM_STEPPER_DRIVER_COUNT];
-        if (!ztm_stepper_nop(responses)) {
+        if (!ztm_stepper_nop(&ztm_stepper_1, responses)) {
             console_printf("\r\nNOP frame failed on pass %u.\r\n", (unsigned)(pass + 1u));
             return -2;
         }
@@ -185,7 +180,7 @@ static int cmd_stepper_status(int argc, char **argv, char *out, size_t out_len)
         bool all_ok = true;
         for (uint8_t id = 1; id <= ZTM_STEPPER_DRIVER_COUNT; id++) {
             uint16_t status = 0;
-            bool ok = ztm_stepper_get_status(id, &status);
+            bool ok = ztm_stepper_get_status(&ztm_stepper_1, id, &status);
             console_printf("  motor %u: %s0x%04X\r\n",
                            id,
                            ok ? "" : "ERROR/",
@@ -202,7 +197,7 @@ static int cmd_stepper_status(int argc, char **argv, char *out, size_t out_len)
     }
 
     uint16_t status = 0;
-    if (!ztm_stepper_get_status(id, &status)) {
+    if (!ztm_stepper_get_status(&ztm_stepper_1, id, &status)) {
         console_printf("\r\nFailed to read motor %u status.\r\n", id);
         return -3;
     }
@@ -224,14 +219,14 @@ static int cmd_stepper_reset(int argc, char **argv, char *out, size_t out_len)
 
     bool ok;
     if (selector_is_all(argv[2])) {
-        ok = ztm_stepper_reset_all();
+        ok = ztm_stepper_reset_all(&ztm_stepper_1);
     } else {
         uint8_t id;
         if (!parse_stepper_id(argv[2], &id)) {
             console_printf("\r\nInvalid motor selector. Use 1..4 or all.\r\n");
             return -2;
         }
-        ok = ztm_stepper_reset(id);
+        ok = ztm_stepper_reset(&ztm_stepper_1, id);
     }
 
     console_printf("\r\n%s\r\n", ok ? "OK" : "Stepper reset failed");
@@ -246,14 +241,14 @@ static int cmd_stepper_hiz(int argc, char **argv, char *out, size_t out_len)
     const char *selector = argc >= 3 ? argv[2] : "all";
     bool ok;
     if (selector_is_all(selector)) {
-        ok = ztm_stepper_hard_hiz_all();
+        ok = ztm_stepper_hard_hiz_all(&ztm_stepper_1);
     } else {
         uint8_t id;
         if (!parse_stepper_id(selector, &id)) {
             console_printf("\r\nUsage: stepper hiz [1..4|all]\r\n");
             return -1;
         }
-        ok = ztm_stepper_hard_hiz(id);
+        ok = ztm_stepper_hard_hiz(&ztm_stepper_1, id);
     }
 
     console_printf("\r\n%s\r\n", ok ? "Outputs placed in high impedance" : "HiZ command failed");
@@ -268,14 +263,14 @@ static int cmd_stepper_stop(int argc, char **argv, char *out, size_t out_len)
     const char *selector = argc >= 3 ? argv[2] : "all";
     bool ok;
     if (selector_is_all(selector)) {
-        ok = ztm_stepper_soft_stop_all();
+        ok = ztm_stepper_soft_stop_all(&ztm_stepper_1);
     } else {
         uint8_t id;
         if (!parse_stepper_id(selector, &id)) {
             console_printf("\r\nUsage: stepper stop [1..4|all]\r\n");
             return -1;
         }
-        ok = ztm_stepper_soft_stop(id);
+        ok = ztm_stepper_soft_stop(&ztm_stepper_1, id);
     }
 
     console_printf("\r\n%s\r\n", ok ? "OK" : "Soft-stop command failed");
@@ -285,7 +280,7 @@ static int cmd_stepper_stop(int argc, char **argv, char *out, size_t out_len)
 static bool cmd_stepper_print_kval_config(uint8_t id)
 {
     ztm_stepper_kval_config_t config;
-    if (!ztm_stepper_get_kval_config(id, &config)) {
+    if (!ztm_stepper_get_kval_config(&ztm_stepper_1, id, &config)) {
         console_printf("  motor %u: READ FAILED\r\n", id);
         return false;
     }
@@ -335,8 +330,8 @@ static int cmd_stepper_config(int argc, char **argv, char *out, size_t out_len)
     bool ok = false;
     if (argc == 4 &&
         (strcmp(argv[3], "default") == 0 || strcmp(argv[3], "defaults") == 0)) {
-        ok = all ? ztm_stepper_apply_test_config_all()
-                 : ztm_stepper_apply_test_config(id);
+        ok = all ? ztm_stepper_apply_test_config_all(&ztm_stepper_1)
+                 : ztm_stepper_apply_test_config(&ztm_stepper_1, id);
         if (ok) {
             console_printf("\r\nCompiled defaults restored: HOLD=%u RUN=%u ACC=%u DEC=%u\r\n",
                            ZTM_STEPPER_DEFAULT_KVAL_HOLD,
@@ -363,8 +358,8 @@ static int cmd_stepper_config(int argc, char **argv, char *out, size_t out_len)
             .acc = (uint8_t)acc,
             .dec = (uint8_t)dec,
         };
-        ok = all ? ztm_stepper_set_kval_config_all(&config)
-                 : ztm_stepper_set_kval_config(id, &config);
+        ok = all ? ztm_stepper_set_kval_config_all(&ztm_stepper_1, &config)
+                 : ztm_stepper_set_kval_config(&ztm_stepper_1, id, &config);
         if (ok) {
             console_printf("\r\nKVAL configuration applied: HOLD=%u RUN=%u ACC=%u DEC=%u\r\n",
                            config.hold,
@@ -438,7 +433,7 @@ static bool parse_stepper_microstep(const char *text,
 static bool cmd_stepper_print_microstep(uint8_t id)
 {
     ztm_stepper_microstep_t mode;
-    if (!ztm_stepper_get_microstep(id, &mode)) {
+    if (!ztm_stepper_get_microstep(&ztm_stepper_1, id, &mode)) {
         console_printf("  motor %u: READ FAILED\r\n", id);
         return false;
     }
@@ -490,8 +485,8 @@ static int cmd_stepper_microstep(int argc, char **argv, char *out, size_t out_le
         return -4;
     }
 
-    const bool ok = all ? ztm_stepper_set_microstep_all(mode)
-                        : ztm_stepper_set_microstep(id, mode);
+    const bool ok = all ? ztm_stepper_set_microstep_all(&ztm_stepper_1, mode)
+                        : ztm_stepper_set_microstep(&ztm_stepper_1, id, mode);
     if (!ok) {
         console_printf("\r\nMicrostep configuration failed.\r\n");
         return -5;
@@ -525,7 +520,7 @@ static int cmd_stepper_run(int argc, char **argv, char *out, size_t out_len)
 
     bool ok;
     if (selector_is_all(argv[2])) {
-        ok = ztm_stepper_run_all(forward, speed);
+        ok = ztm_stepper_run_all(&ztm_stepper_1, forward, speed);
     } else {
         uint8_t id;
         if (!parse_stepper_id(argv[2], &id)) {
@@ -536,7 +531,7 @@ static int cmd_stepper_run(int argc, char **argv, char *out, size_t out_len)
             console_printf("\r\nMotor %u is unused and is intentionally held in hard HiZ.\r\n", id);
             return -4;
         }
-        ok = ztm_stepper_run(id, forward, speed);
+        ok = ztm_stepper_run(&ztm_stepper_1, id, forward, speed);
     }
 
     console_printf("\r\n%s\r\n", ok ? "OK" : "RUN command failed");
@@ -568,7 +563,7 @@ static int cmd_stepper_move(int argc, char **argv, char *out, size_t out_len)
         return -3;
     }
 
-    bool ok = ztm_stepper_move(id, forward, steps);
+    bool ok = ztm_stepper_move(&ztm_stepper_1, id, forward, steps);
     console_printf("\r\n%s\r\n", ok ? "OK" : "MOVE command failed");
     return ok ? 0 : -3;
 }
@@ -594,7 +589,7 @@ static int cmd_stepper_get(int argc, char **argv, char *out, size_t out_len)
     }
 
     uint32_t value = 0;
-    if (!ztm_stepper_get_param(id, (uint8_t)reg, (uint8_t)nbytes, &value)) {
+    if (!ztm_stepper_get_param(&ztm_stepper_1, id, (uint8_t)reg, (uint8_t)nbytes, &value)) {
         console_printf("\r\nRegister read failed.\r\n");
         return -3;
     }
@@ -635,7 +630,7 @@ static int cmd_stepper_set(int argc, char **argv, char *out, size_t out_len)
         return -3;
     }
 
-    bool ok = ztm_stepper_set_param(id,
+    bool ok = ztm_stepper_set_param(&ztm_stepper_1, id,
                                     (uint8_t)reg,
                                     (uint8_t)nbytes,
                                     value);
@@ -813,7 +808,7 @@ static int cmd_pump_stop(int argc, char **argv, char *out, size_t out_len)
         case 2: return cmd_pump_sump_stop(argc, argv, out, out_len);
         case 3: return cmd_pump_wick_stop(argc, argv, out, out_len);
         default:
-            return pump_command_result(ztm_stepper_hard_hiz(ZTM_STEPPER_UNUSED_DRIVER_ID),
+            return pump_command_result(ztm_stepper_hard_hiz(&ztm_stepper_1, ZTM_STEPPER_UNUSED_DRIVER_ID),
                                        "Motor 4 remains in hard HiZ");
     }
 }
@@ -2141,10 +2136,10 @@ static void print_hv_snapshot(const ztm_psu_hv_snapshot_t *snapshot)
 static int cmd_hv_info(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
-    psu_hv_t *device = &ztm_psu_hv_1;
+    ztm_psu_hv_t *device = &ztm_psu_hv_1;
     uint8_t address = device->i2c_address ? device->i2c_address : AD5282_ADDR(0u);
 
-    console_printf("\r\nHV PSU module: %s\r\n", ztm_psu_hv_ready() ? "READY" : "NOT READY");
+    console_printf("\r\nHV PSU module: %s\r\n", ztm_psu_hv_ready(&ztm_psu_hv_1) ? "READY" : "NOT READY");
     console_printf("  AD5282: I2C0 address 0x%02X; ON uses RDAC1=0/RDAC2=setpoint, OFF uses 255/255\r\n",
                    (unsigned)address);
     console_printf("  LM5164: EN=PCAL6416 P1.6 (EX pin %d), PG=PCAL6416 P1.5 (EX pin %d)\r\n",
@@ -2193,7 +2188,7 @@ static int cmd_hv_info(int argc, char **argv, char *out, size_t out_len)
         }
     }
 
-    if (device->potentiometer.i2c_bus.i2c) {
+    if (device->config.i2c) {
         ztm_psu_hv_snapshot_t snapshot;
         (void)ztm_psu_hv_read_snapshot(device, &snapshot);
         print_hv_snapshot(&snapshot);
@@ -2205,11 +2200,11 @@ static int cmd_hv_probe(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     ztm_psu_hv_probe_result_t result;
-    int rc = ztm_psu_hv_probe(&result);
+    int rc = ztm_psu_hv_probe(&ztm_psu_hv_1, &result);
 
     console_printf("\r\nHV PSU safe probe (converter forced OFF):\r\n");
-    console_printf("  Connector pins: %s; EN forced low: %s\r\n",
-                   result.pins_configured ? "OK" : "FAILED",
+    console_printf("  Control pins: %s; EN forced low: %s\r\n",
+                   result.controls_prepared ? "OK" : "FAILED",
                    result.forced_off ? "yes" : "no");
     console_printf("  AD5282 0x%02X: %s\r\n",
                    (unsigned)result.i2c_address,
@@ -2516,7 +2511,7 @@ static int cmd_hv_off(int argc, char **argv, char *out, size_t out_len)
 static int cmd_hv_read(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
-    if (!ztm_psu_hv_1.potentiometer.i2c_bus.i2c) {
+    if (!ztm_psu_hv_1.config.i2c) {
         console_printf("\r\nHV module has no initialized I2C context; use 'hv probe' or 'hv reinit'.\r\n");
         return -1;
     }
@@ -2724,7 +2719,7 @@ static const char *adc_measure_stage_name(ztm_adc_measure_stage_t stage)
 static void print_adc_last_measurement(void)
 {
     ztm_adc_measure_diag_t diag;
-    if (!ztm_adc_get_last_measurement(&diag)) {
+    if (!ztm_adc_get_last_measurement(&ztm_adc_1, &diag)) {
         console_printf("  Measurement diagnostics unavailable.\r\n");
         return;
     }
@@ -2768,7 +2763,7 @@ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     ztm_adc_status_t module_status;
-    if (!ztm_adc_get_status(&module_status)) {
+    if (!ztm_adc_get_status(&ztm_adc_1, &module_status)) {
         console_printf("\r\nAD7124 module: diagnostics unavailable\r\n");
         return -1;
     }
@@ -2806,13 +2801,13 @@ static int cmd_adc_info(int argc, char **argv, char *out, size_t out_len)
 
     uint32_t adc_control = 0u, tc_config = 0u, rtd_config = 0u;
     uint32_t tc_filter = 0u, rtd_filter = 0u, io1 = 0u, io2 = 0u;
-    bool ok = ztm_adc_read_register(AD7124_REG_ADC_CONTROL, 2u, &adc_control) &&
-              ztm_adc_read_register(AD7124_REG_CONFIG(ZTM_ADC_SETUP_TC), 2u, &tc_config) &&
-              ztm_adc_read_register(AD7124_REG_CONFIG(ZTM_ADC_SETUP_RTD), 2u, &rtd_config) &&
-              ztm_adc_read_register(AD7124_REG_FILTER(ZTM_ADC_SETUP_TC), 3u, &tc_filter) &&
-              ztm_adc_read_register(AD7124_REG_FILTER(ZTM_ADC_SETUP_RTD), 3u, &rtd_filter) &&
-              ztm_adc_read_register(AD7124_REG_IO_CONTROL_1, 3u, &io1) &&
-              ztm_adc_read_register(AD7124_REG_IO_CONTROL_2, 2u, &io2);
+    bool ok = ztm_adc_read_register(&ztm_adc_1, AD7124_REG_ADC_CONTROL, 2u, &adc_control) &&
+              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_CONFIG(ZTM_ADC_SETUP_TC), 2u, &tc_config) &&
+              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_CONFIG(ZTM_ADC_SETUP_RTD), 2u, &rtd_config) &&
+              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_FILTER(ZTM_ADC_SETUP_TC), 3u, &tc_filter) &&
+              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_FILTER(ZTM_ADC_SETUP_RTD), 3u, &rtd_filter) &&
+              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_IO_CONTROL_1, 3u, &io1) &&
+              ztm_adc_read_register(&ztm_adc_1, AD7124_REG_IO_CONTROL_2, 2u, &io2);
     if (ok) {
         console_printf("  Registers: ADC_CONTROL=0x%04lX TC_CFG=0x%04lX RTD_CFG=0x%04lX\r\n",
                        (unsigned long)adc_control,
@@ -2833,7 +2828,7 @@ static int cmd_adc_cjc(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     ztm_adc_rtd_sample_t sample;
-    if (!ztm_adc_read_cold_junction(&sample)) {
+    if (!ztm_adc_read_cold_junction(&ztm_adc_1, &sample)) {
         console_printf("\r\nCold-junction RTD read failed.\r\n");
         print_adc_last_measurement();
         return -1;
@@ -2854,7 +2849,7 @@ static int cmd_adc_rtd(int argc, char **argv, char *out, size_t out_len)
     if (selector_is_all(argv[2])) {
         ztm_adc_rtd_sample_t cjc;
         ztm_adc_rtd_sample_t rtds[ZTM_ADC_RTD_COUNT];
-        if (!ztm_adc_read_all_rtds(&cjc, rtds)) {
+        if (!ztm_adc_read_all_rtds(&ztm_adc_1, &cjc, rtds)) {
             console_printf("\r\nRTD scan failed; excitation has been turned off.\r\n");
             print_adc_last_measurement();
             return -2;
@@ -2876,7 +2871,7 @@ static int cmd_adc_rtd(int argc, char **argv, char *out, size_t out_len)
     }
 
     ztm_adc_rtd_sample_t sample;
-    if (!ztm_adc_read_rtd((uint8_t)id, &sample)) {
+    if (!ztm_adc_read_rtd(&ztm_adc_1, (uint8_t)id, &sample)) {
         console_printf("\r\nRTD%lu read failed; excitation has been turned off.\r\n",
                        (unsigned long)id);
         print_adc_last_measurement();
@@ -2893,7 +2888,7 @@ static void print_adc_tc_types(void)
 {
     for (uint8_t tc = 1u; tc <= ZTM_ADC_TC_COUNT; tc++) {
         thermocouple_type_t type;
-        if (ztm_adc_get_thermocouple_type(tc, &type)) {
+        if (ztm_adc_get_thermocouple_type(&ztm_adc_1, tc, &type)) {
             console_printf("  TC%u: Type %s\r\n",
                            (unsigned)tc, thermocouple_type_name(type));
         } else {
@@ -2923,7 +2918,7 @@ static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
             print_adc_tc_types();
         } else {
             thermocouple_type_t type;
-            if (!ztm_adc_get_thermocouple_type((uint8_t)id, &type)) {
+            if (!ztm_adc_get_thermocouple_type(&ztm_adc_1, (uint8_t)id, &type)) {
                 console_printf("  TC%lu type unavailable.\r\n", (unsigned long)id);
                 return -3;
             }
@@ -2942,7 +2937,7 @@ static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
 
     if (all) {
         for (uint8_t tc = 1u; tc <= ZTM_ADC_TC_COUNT; tc++) {
-            if (!ztm_adc_set_thermocouple_type(tc, type)) {
+            if (!ztm_adc_set_thermocouple_type(&ztm_adc_1, tc, type)) {
                 console_printf("\r\nFailed to set TC%u type.\r\n", (unsigned)tc);
                 return -5;
             }
@@ -2950,7 +2945,7 @@ static int cmd_adc_tc_type(int argc, char **argv, char *out, size_t out_len)
         console_printf("\r\nTC1..3 set to Type %s (runtime setting).\r\n",
                        thermocouple_type_name(type));
     } else {
-        if (!ztm_adc_set_thermocouple_type((uint8_t)id, type)) {
+        if (!ztm_adc_set_thermocouple_type(&ztm_adc_1, (uint8_t)id, type)) {
             console_printf("\r\nFailed to set TC%lu type.\r\n", (unsigned long)id);
             return -6;
         }
@@ -2970,7 +2965,7 @@ static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
 
     if (selector_is_all(argv[2])) {
         ztm_adc_tc_sample_t samples[ZTM_ADC_TC_COUNT];
-        if (!ztm_adc_read_all_thermocouples(samples)) {
+        if (!ztm_adc_read_all_thermocouples(&ztm_adc_1, samples)) {
             console_printf("\r\nThermocouple scan failed.\r\n");
             print_adc_last_measurement();
             return -2;
@@ -2989,7 +2984,7 @@ static int cmd_adc_tc(int argc, char **argv, char *out, size_t out_len)
     }
 
     ztm_adc_tc_sample_t sample;
-    if (!ztm_adc_read_thermocouple((uint8_t)id, &sample)) {
+    if (!ztm_adc_read_thermocouple(&ztm_adc_1, (uint8_t)id, &sample)) {
         console_printf("\r\nTC%lu read failed.\r\n", (unsigned long)id);
         print_adc_last_measurement();
         return -4;
@@ -3005,7 +3000,7 @@ static int cmd_adc_read_all(int argc, char **argv, char *out, size_t out_len)
     ztm_adc_rtd_sample_t cjc;
     ztm_adc_rtd_sample_t rtds[ZTM_ADC_RTD_COUNT];
     ztm_adc_tc_sample_t tcs[ZTM_ADC_TC_COUNT];
-    if (!ztm_adc_read_all(&cjc, rtds, tcs)) {
+    if (!ztm_adc_read_all(&ztm_adc_1, &cjc, rtds, tcs)) {
         console_printf("\r\nComplete ADC scan failed; RTD excitation has been turned off.\r\n");
         print_adc_last_measurement();
         return -1;
@@ -3027,7 +3022,7 @@ static int cmd_adc_read_all(int argc, char **argv, char *out, size_t out_len)
 static int cmd_adc_verify(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
-    bool ok = ztm_adc_verify_configuration();
+    bool ok = ztm_adc_verify_configuration(&ztm_adc_1);
     console_printf("\r\nAD7124 configuration %s.\r\n",
                    ok ? "matches the ZTM ADC board map" : "verification FAILED");
     return ok ? 0 : -1;
@@ -3038,7 +3033,7 @@ static int cmd_adc_errors(int argc, char **argv, char *out, size_t out_len)
     (void)argc; (void)argv; (void)out; (void)out_len;
     uint8_t status = 0u;
     uint32_t errors = 0u;
-    if (!ztm_adc_read_error_status(&status, &errors)) {
+    if (!ztm_adc_read_error_status(&ztm_adc_1, &status, &errors)) {
         console_printf("\r\nAD7124 status/error read failed.\r\n");
         return -1;
     }
@@ -3060,7 +3055,7 @@ static int cmd_adc_reg(int argc, char **argv, char *out, size_t out_len)
     }
 
     uint32_t value = 0u;
-    if (!ztm_adc_read_register((uint8_t)address, (uint8_t)width, &value)) {
+    if (!ztm_adc_read_register(&ztm_adc_1, (uint8_t)address, (uint8_t)width, &value)) {
         console_printf("\r\nAD7124 register read failed. Check address and register width.\r\n");
         return -2;
     }
@@ -3089,11 +3084,11 @@ static int cmd_adc_calibrate(int argc, char **argv, char *out, size_t out_len)
 
     bool ok = false;
     if (strcmp(argv[2], "tc") == 0) {
-        ok = ztm_adc_calibrate_tc_setup();
+        ok = ztm_adc_calibrate_tc_setup(&ztm_adc_1);
     } else if (strcmp(argv[2], "rtd") == 0) {
-        ok = ztm_adc_calibrate_rtd_setup();
+        ok = ztm_adc_calibrate_rtd_setup(&ztm_adc_1);
     } else if (strcmp(argv[2], "all") == 0) {
-        ok = ztm_adc_calibrate_all();
+        ok = ztm_adc_calibrate_all(&ztm_adc_1);
     } else {
         console_printf("\r\nUsage: adc calibrate <tc|rtd|all>\r\n");
         return -2;
@@ -3107,7 +3102,7 @@ static int cmd_adc_calibrate(int argc, char **argv, char *out, size_t out_len)
 static int cmd_adc_iout_off(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
-    bool ok = ztm_adc_iout_off();
+    bool ok = ztm_adc_iout_off(&ztm_adc_1);
     console_printf("\r\n%s\r\n", ok ? "AD7124 excitation currents are off"
                                       : "Failed to disable AD7124 excitation currents");
     return ok ? 0 : -1;
@@ -3127,7 +3122,7 @@ static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
     console_printf("\r\nRequesting safe state...\r\n");
 
     bool pump_state_ok = !pumping_ready() || pumping_all_stop();
-    bool hiz_ok = !ztm6470_ready() || ztm_stepper_hard_hiz_all();
+    bool hiz_ok = !ztm_stepper_ready(&ztm_stepper_1) || ztm_stepper_hard_hiz_all(&ztm_stepper_1);
     bool stepper_ok = pump_state_ok && hiz_ok;
 
     bool tec_ok = true;
@@ -3142,10 +3137,8 @@ static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
             if (!entry || !entry->mod_inst) {
                 continue;
             }
-            psu_tec_t *tec = (psu_tec_t *)entry->mod_inst;
-            bool disabled = mcp4901_set_enable(tec, false);
-            bool shutdown = mcp4901_shutdown(tec);
-            tec_ok = disabled && shutdown && tec_ok;
+            ztm_psu_tec_t *tec = (ztm_psu_tec_t *)entry->mod_inst;
+            tec_ok = ztm_psu_tec_stop(tec) && tec_ok;
         }
     }
 
@@ -3156,7 +3149,7 @@ static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
     hv_ok = hv_enable_read && !hv_enabled;
 
     bool pwm_ok = !modules_find_by_short_name("ztm_pwm") || ztm_pwm_stop_all(&ztm_pwm_1);
-    bool adc_ok = !ztm_adc_ready() || ztm_adc_iout_off();
+    bool adc_ok = !ztm_adc_ready(&ztm_adc_1) || ztm_adc_iout_off(&ztm_adc_1);
 
     console_printf("  steppers: %s\r\n", stepper_ok ? "HiZ/not fitted" : "FAILED");
     console_printf("  TECs:     %s\r\n", tec_ok ? "disabled/not fitted" : "FAILED");

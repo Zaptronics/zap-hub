@@ -1,0 +1,30 @@
+# Zap dependency lockfile. Commit this file. DO NOT EDIT BY HAND.
+schema: 1
+
+dependencies:
+  zapee:
+    type: git
+    uri: "git@github.com:Zaptronics/zap-ee.git"
+    direct: true
+    root_requested: v0.6.0
+    requested:
+      - v0.6.0
+    resolved: v0.6.0
+    commit: 215de47b34a828cbe33877e994571d91e738fbc1
+    manifest_sha256: 238b91289d48fe7e8c6f1a59df4986e1d021239d65f4c154b0a7b1c995e74cad
+    zephyr_module: true
+    root_zephyr_module: true
+    root_components:
+      - zap::ztm_adc
+      - zap::ztm_psu_hv
+      - zap::ztm_psu_tec
+      - zap::ztm_pwm
+      - zap::ztm_stepper
+    components:
+      - zap::ztm_adc
+      - zap::ztm_psu_hv
+      - zap::ztm_psu_tec
+      - zap::ztm_pwm
+      - zap::ztm_stepper
+    parents:
+      - root

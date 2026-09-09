@@ -1,20 +1,20 @@
 #include "ztmb/ztmb.h"
-#include "modules/ztm_psu_hv.h"
+#include "ztmb/ztm_psu_hv_adapter.h"
 #include "sweeping.h"
 
 static module_entry_t *g_hv_module;
 static int g_hv_state_requested = -1;
 static int g_hv_state_actual = -1;
 
-static psu_hv_t *hv_device(void)
+static ztm_psu_hv_t *hv_device(void)
 {
-    return g_hv_module ? (psu_hv_t *)g_hv_module->mod_inst : NULL;
+    return g_hv_module ? (ztm_psu_hv_t *)g_hv_module->mod_inst : NULL;
 }
 
 int sweeping_init(void)
 {
     g_hv_module = modules_find_by_short_name("ztm_psu_hv");
-    psu_hv_t *device = hv_device();
+    ztm_psu_hv_t *device = hv_device();
     if (!device) {
         log_printf("Error: ztm_psu_hv module not found\n");
         return -1;
@@ -39,7 +39,7 @@ int sweeping_set_state(int new_state)
 
 int sweeping_update(void)
 {
-    psu_hv_t *device = hv_device();
+    ztm_psu_hv_t *device = hv_device();
     if (!device) {
         return -1;
     }

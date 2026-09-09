@@ -123,33 +123,6 @@ int ztmb_ztm_adc_deinit(void)
     return ztm_adc_deinit(&ztm_adc_1);
 }
 
-bool ztmb_ztm_adc_read_test(ztm_adc_t *module)
-{
-    if (!module || module != &ztm_adc_1) {
-        return false;
-    }
-
-    ztm_adc_rtd_sample_t sample;
-    if (!ztm_adc_read_cold_junction(module, &sample)) {
-        return false;
-    }
-
-    if (sample.status == ZTM_ADC_SENSOR_DISCONNECTED) {
-        log_printf("CJC Pt1000: raw=0x%06lX DISCONNECTED\n",
-                   (unsigned long)sample.raw_code);
-    } else if (sample.status == ZTM_ADC_SENSOR_OUT_OF_RANGE) {
-        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm OUT OF RANGE\n",
-                   (unsigned long)sample.raw_code,
-                   sample.resistance_ohms);
-    } else {
-        log_printf("CJC Pt1000: raw=0x%06lX R=%.3f ohm T=%.3f C\n",
-                   (unsigned long)sample.raw_code,
-                   sample.resistance_ohms,
-                   sample.temperature_c);
-    }
-    return true;
-}
-
 const bus_spi_t *ztmb_ztm_adc_bus(void)
 {
     return &g_adc_spi.bus;

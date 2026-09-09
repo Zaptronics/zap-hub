@@ -1,5 +1,4 @@
 #include "ztmb/ztmb.h"
-#include "modules/ztm_adc.h"
 #include "sensing.h"
 
 static module_entry_t *g_adc_module;

@@ -2,7 +2,7 @@
 
 #include "ztmb/ztmb.h"
 #include "ztmb/modules.h"
-#include "modules/ztm_stepper.h"
+#include "ztmb/ztm_stepper_adapter.h"
 #include "pumping.h"
 
 /* Physical pump mapping for this chamber. */
@@ -41,7 +41,7 @@ static float sump_speed;
 
 static bool pumping_dependencies_ready(void)
 {
-    return g_pumping_ready && g_stepper_module && g_stepper_module->mod_inst && ztm6470_ready();
+    return g_pumping_ready && g_stepper_module && g_stepper_module->mod_inst && ztm_stepper_ready(&ztm_stepper_1);
 }
 
 bool pumping_ready(void)
@@ -52,7 +52,7 @@ bool pumping_ready(void)
 static bool pumping_filter_start(float speed, pump_state_t state)
 {
     if (!pumping_dependencies_ready() ||
-        !ztm_stepper_run(PUMP_FILTER_STEPPER_ID, PUMP_FILTER_DIRECTION, speed)) {
+        !ztm_stepper_run(&ztm_stepper_1, PUMP_FILTER_STEPPER_ID, PUMP_FILTER_DIRECTION, speed)) {
         return false;
     }
 
@@ -74,7 +74,7 @@ bool pumping_filter_start_fast(void)
 bool pumping_filter_stop(void)
 {
     if (!pumping_dependencies_ready() ||
-        !ztm_stepper_soft_stop(PUMP_FILTER_STEPPER_ID)) {
+        !ztm_stepper_soft_stop(&ztm_stepper_1, PUMP_FILTER_STEPPER_ID)) {
         return false;
     }
 
@@ -86,7 +86,7 @@ bool pumping_filter_stop(void)
 static bool pumping_wick_start(bool direction, uint32_t duration_ms, pump_state_t state)
 {
     if (!pumping_dependencies_ready() ||
-        !ztm_stepper_run(PUMP_WICK_STEPPER_ID, direction, PUMP_WICK_SPEED)) {
+        !ztm_stepper_run(&ztm_stepper_1, PUMP_WICK_STEPPER_ID, direction, PUMP_WICK_SPEED)) {
         return false;
     }
 
@@ -121,7 +121,7 @@ bool pumping_wick_drain(void)
 bool pumping_wick_stop(void)
 {
     if (!pumping_dependencies_ready() ||
-        !ztm_stepper_soft_stop(PUMP_WICK_STEPPER_ID)) {
+        !ztm_stepper_soft_stop(&ztm_stepper_1, PUMP_WICK_STEPPER_ID)) {
         return false;
     }
 
@@ -135,7 +135,7 @@ bool pumping_wick_stop(void)
 bool pumping_sump_run(void)
 {
     if (!pumping_dependencies_ready() ||
-        !ztm_stepper_run(PUMP_SUMP_STEPPER_ID, PUMP_SUMP_DIRECTION, PUMP_SUMP_SPEED)) {
+        !ztm_stepper_run(&ztm_stepper_1, PUMP_SUMP_STEPPER_ID, PUMP_SUMP_DIRECTION, PUMP_SUMP_SPEED)) {
         return false;
     }
 
@@ -147,7 +147,7 @@ bool pumping_sump_run(void)
 bool pumping_sump_stop(void)
 {
     if (!pumping_dependencies_ready() ||
-        !ztm_stepper_soft_stop(PUMP_SUMP_STEPPER_ID)) {
+        !ztm_stepper_soft_stop(&ztm_stepper_1, PUMP_SUMP_STEPPER_ID)) {
         return false;
     }
 
@@ -162,7 +162,7 @@ bool pumping_all_stop(void)
         return false;
     }
 
-    bool ok = ztm_stepper_soft_stop_all();
+    bool ok = ztm_stepper_soft_stop_all(&ztm_stepper_1);
 
     filter_state = PUMP_OFF;
     filter_speed = 0.0f;
@@ -179,7 +179,7 @@ bool pumping_all_stop(void)
 int pumping_init(void)
 {
     g_stepper_module = modules_find_by_short_name("ztm_stepper");
-    if (!g_stepper_module || !g_stepper_module->mod_inst || !ztm6470_ready()) {
+    if (!g_stepper_module || !g_stepper_module->mod_inst || !ztm_stepper_ready(&ztm_stepper_1)) {
         log_printf("Error: initialized ztm_stepper module not found\n");
         g_pumping_ready = false;
         return -1;

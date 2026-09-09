@@ -6,45 +6,45 @@
 #include "ztmb/cs_lines.h"
 #include "ztmb/io_exp.h"
 
-#include "modules/ztm_adc.h"
-#include "modules/ztm_psu_hv.h"
-#include "modules/ztm_psu_tec.h"
+#include "ztmb/ztm_adc_adapter.h"
+#include "ztmb/ztm_psu_hv_adapter.h"
+#include "ztmb/ztm_psu_tec_adapter.h"
 #include "ztmb/ztm_pwm_adapter.h"
-#include "modules/ztm_stepper.h"
+#include "ztmb/ztm_stepper_adapter.h"
 
 static module_entry_t g_modules[] = {
     {
         .short_name = "ztm_adc",
         .long_name  = "AD7124-8 temperature ADC (3 TC, CJC Pt1000, 8 RTD)",
-        .init       = ztm_adc_init,
+        .init       = ztmb_ztm_adc_init,
         .bus_ctx    = (void *)ZTMB_SPI1_PORT,
         .mod_inst   = &ztm_adc_1,
         .addr       = ZTMB_ADC_CS_2,
         .en_pin     = EX_NONE,
-        .poll       = ztm_adc_poll,
-        .deinit     = ztm_adc_deinit,
+        .poll       = ztmb_ztm_adc_poll,
+        .deinit     = ztmb_ztm_adc_deinit,
     },
     {
         .short_name = "ztm_psu_hv",
         .long_name  = "High Voltage PSU (AD5282 setpoint, PG/EN, TLA2518 VSENSE)",
-        .init       = ztm_psu_hv_init,
+        .init       = ztmb_ztm_psu_hv_init,
         .bus_ctx    = (void *)ZTMB_I2C0_PORT,
         .mod_inst   = &ztm_psu_hv_1,
         .addr       = 0x00,
         .en_pin     = EX_HV_EN_1,
-        .poll       = ztm_psu_hv_poll,
-        .deinit     = ztm_psu_hv_deinit,
+        .poll       = ztmb_ztm_psu_hv_poll,
+        .deinit     = ztmb_ztm_psu_hv_deinit,
     },
     {
         .short_name = "ztm_stepper",
         .long_name  = "Stepper motor controller (4 x L6470 SPI chain)",
-        .init       = ztm_stepper_init,
+        .init       = ztmb_stepper_init,
         .bus_ctx    = (void *)ZTMB_SPI0_PORT,
         .mod_inst   = &ztm_stepper_1,
         .addr       = ZTMB_STEP_CS_1,
         .en_pin     = EX_STEP_EN_1,
-        .poll       = ztm_stepper_poll,
-        .deinit     = NULL,
+        .poll       = ztmb_stepper_poll,
+        .deinit     = ztmb_stepper_deinit,
     },
     {
         .short_name = "ztm_pwm",
@@ -60,46 +60,46 @@ static module_entry_t g_modules[] = {
     {
         .short_name = "psu_tec_1",
         .long_name  = "Thermoelectric cooler 1 (MCP4901 DAC on SPI0)",
-        .init       = ztm_psu_tec_init,
+        .init       = ztmb_ztm_psu_tec_init,
         .bus_ctx    = (void *)ZTMB_SPI0_PORT,
         .mod_inst   = &ztm_psu_tec_1,
         .addr       = ZTMB_TEC_CS_1,
         .en_pin     = EX_TEC_EN_1,
         .poll       = NULL,
-        .deinit     = NULL,
+        .deinit     = ztmb_ztm_psu_tec_deinit_1,
     },
     {
         .short_name = "psu_tec_2",
         .long_name  = "Thermoelectric cooler 2 (MCP4901 DAC on SPI0)",
-        .init       = ztm_psu_tec_init,
+        .init       = ztmb_ztm_psu_tec_init,
         .bus_ctx    = (void *)ZTMB_SPI0_PORT,
         .mod_inst   = &ztm_psu_tec_2,
         .addr       = ZTMB_TEC_CS_2,
         .en_pin     = EX_TEC_EN_2,
         .poll       = NULL,
-        .deinit     = NULL,
+        .deinit     = ztmb_ztm_psu_tec_deinit_2,
     },
     {
         .short_name = "psu_tec_3",
         .long_name  = "Thermoelectric cooler 3 (MCP4901 DAC on SPI0)",
-        .init       = ztm_psu_tec_init,
+        .init       = ztmb_ztm_psu_tec_init,
         .bus_ctx    = (void *)ZTMB_SPI0_PORT,
         .mod_inst   = &ztm_psu_tec_3,
         .addr       = ZTMB_TEC_CS_3,
         .en_pin     = EX_TEC_EN_3,
         .poll       = NULL,
-        .deinit     = NULL,
+        .deinit     = ztmb_ztm_psu_tec_deinit_3,
     },
     {
         .short_name = "psu_tec_4",
         .long_name  = "Thermoelectric cooler 4 (MCP4901 DAC on SPI0)",
-        .init       = ztm_psu_tec_init,
+        .init       = ztmb_ztm_psu_tec_init,
         .bus_ctx    = (void *)ZTMB_SPI0_PORT,
         .mod_inst   = &ztm_psu_tec_4,
         .addr       = ZTMB_TEC_CS_4,
         .en_pin     = EX_TEC_EN_4,
         .poll       = NULL,
-        .deinit     = NULL,
+        .deinit     = ztmb_ztm_psu_tec_deinit_4,
     },
 };
 

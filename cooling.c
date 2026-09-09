@@ -5,7 +5,7 @@
 #include "ztmb/modules.h"
 #include "ztmb/log.h"
 #include "ztmb/adc.h"
-#include "modules/ztm_psu_tec.h"
+#include "ztmb/ztm_psu_tec_adapter.h"
 #include "cooling.h"
 
 #define COOLING_TEC_SETTLE_US 100000u
@@ -27,12 +27,12 @@ static bool cooling_index(uint8_t channel_id, size_t *index)
     return true;
 }
 
-static psu_tec_t *cooling_device(size_t index)
+static ztm_psu_tec_t *cooling_device(size_t index)
 {
     if (index >= COOLING_TEC_COUNT || !g_peltiers[index]) {
         return NULL;
     }
-    return (psu_tec_t *)g_peltiers[index]->mod_inst;
+    return (ztm_psu_tec_t *)g_peltiers[index]->mod_inst;
 }
 
 static void cooling_fill_status(size_t index,
@@ -133,12 +133,12 @@ bool cooling_tec_set_raw(uint8_t channel_id,
         return false;
     }
 
-    psu_tec_t *device = cooling_device(index);
+    ztm_psu_tec_t *device = cooling_device(index);
     if (!device) {
         return false;
     }
 
-    if (!mcp4901_set_then_enable(device, dac_code, COOLING_TEC_SETTLE_US)) {
+    if (!ztm_psu_tec_start(device, dac_code, COOLING_TEC_SETTLE_US)) {
         /* Best-effort recovery through the authoritative enable-off path. */
         (void)cooling_tec_stop(channel_id);
         return false;
@@ -167,8 +167,8 @@ bool cooling_tec_set_all_raw(uint8_t dac_code,
 
     /* Disable all power stages before changing any DAC code. */
     for (size_t i = 0; i < COOLING_TEC_COUNT; i++) {
-        psu_tec_t *device = cooling_device(i);
-        if (!device || !mcp4901_set_enable(device, false)) {
+        ztm_psu_tec_t *device = cooling_device(i);
+        if (!device || !ztm_psu_tec_set_enable(device, false)) {
             (void)cooling_tec_stop_all();
             return false;
         }
@@ -176,8 +176,8 @@ bool cooling_tec_set_all_raw(uint8_t dac_code,
     }
 
     for (size_t i = 0; i < COOLING_TEC_COUNT; i++) {
-        psu_tec_t *device = cooling_device(i);
-        if (!device || !mcp4901_set_raw(device, dac_code)) {
+        ztm_psu_tec_t *device = cooling_device(i);
+        if (!device || !ztm_psu_tec_set_raw(device, dac_code)) {
             (void)cooling_tec_stop_all();
             return false;
         }
@@ -185,8 +185,8 @@ bool cooling_tec_set_all_raw(uint8_t dac_code,
     }
 
     for (size_t i = 0; i < COOLING_TEC_COUNT; i++) {
-        psu_tec_t *device = cooling_device(i);
-        if (!device || !mcp4901_set_enable(device, true)) {
+        ztm_psu_tec_t *device = cooling_device(i);
+        if (!device || !ztm_psu_tec_set_enable(device, true)) {
             (void)cooling_tec_stop_all();
             return false;
         }
@@ -208,28 +208,21 @@ bool cooling_tec_stop(uint8_t channel_id)
         return false;
     }
 
-    psu_tec_t *device = cooling_device(index);
+    ztm_psu_tec_t *device = cooling_device(index);
     if (!device) {
         return false;
     }
 
-    /*
-     * The external enable line is the authoritative power-off control.
-     * Disable it first, then place the DAC itself in shutdown as a
-     * secondary safe state.  Track the actual enable state even if the
-     * subsequent SPI shutdown frame fails.
-     */
-    bool disabled = mcp4901_set_enable(device, false);
-    if (disabled) {
-        g_enabled[index] = false;
+    const bool stopped = ztm_psu_tec_stop(device);
+    ztm_psu_tec_status_t state;
+    if (ztm_psu_tec_get_status(device, &state)) {
+        /* EN can be off even when the secondary DAC shutdown fails. */
+        if (state.enable_valid) {
+            g_enabled[index] = state.enabled;
+        }
+        g_dac_codes[index] = state.dac_code;
     }
-
-    bool shutdown = mcp4901_shutdown(device);
-    if (shutdown) {
-        g_dac_codes[index] = 0u;
-    }
-
-    return disabled && shutdown;
+    return stopped;
 }
 
 bool cooling_tec_stop_all(void)
@@ -243,14 +236,4 @@ bool cooling_tec_stop_all(void)
         all_ok = cooling_tec_stop(channel_id) && all_ok;
     }
     return all_ok;
-}
-
-bool ztm_psu_tec_start(uint8_t value)
-{
-    return cooling_tec_set_raw(1u, value, NULL);
-}
-
-bool ztm_psu_tec_stop(void)
-{
-    return cooling_tec_stop(1u);
 }
