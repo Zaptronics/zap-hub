@@ -2,15 +2,15 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "drivers/tla2518.h"
 
-int ztmb_adc_init(spi_inst_t *spi);
+/* Onboard ADC initialization is owned by the ZTPICO2 board component. */
 
 /*
  * Read one TLA2518 input and scale it back through an external divider.
  * ratio_thousands is the input/output ratio multiplied by 1000; for the
  * TEC 130k/20k divider it is 7500 (7.5:1).
  */
+// notes.
 bool ztmb_adc_read_channel(uint8_t channel,
                            uint32_t ratio_thousands,
                            uint16_t *code,

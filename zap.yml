@@ -2,6 +2,7 @@
 schema: 5
 
 project:
+  name: zap-hub
   environment: pico-sdk
   target: Hub
   board: pico2_w
@@ -15,9 +16,9 @@ build:
 upload:
   default: auto
   order:
+    - openocd
     - bootsel
     - picotool
-    - openocd
   methods:
     bootsel:
       type: volume-copy
@@ -25,25 +26,6 @@ upload:
       volume_labels:
         - RP2350
         - RPI-RP2
-    picotool:
-      type: command
-      artifact: "{build_dir}/{target}.uf2"
-      executable: picotool
-      search:
-        - PATH
-        - "{pico_home}/picotool"
-      variables:
-        serial: env:ZAP_PICO_SERIAL
-      args:
-        - load
-        - -f
-        - -v
-        - -x
-        - "{artifact}"
-      optional_args:
-        serial:
-          - --ser
-          - "{serial}"
     openocd:
       type: command
       artifact: "{build_dir}/{target}.elf"
@@ -75,12 +57,30 @@ upload:
         probe_serial:
           - -c
           - "adapter serial {probe_serial}"
-
+    picotool:
+      type: command
+      artifact: "{build_dir}/{target}.uf2"
+      executable: picotool
+      search:
+        - PATH
+        - "{pico_home}/picotool"
+      variables:
+        serial: env:ZAP_PICO_SERIAL
+      args:
+        - load
+        - -f
+        - -v
+        - -x
+        - "{artifact}"
+      optional_args:
+        serial:
+          - --ser
+          - "{serial}"
+          
 dependencies:
   zapee:
-    type: git
-    uri: "git@github.com:Zaptronics/zap-ee.git"
-    version: v0.6.0
+    type: path
+    uri: ../ZapEE
     zephyr_module: true
     components:
       - zap::ztm_pwm
@@ -88,3 +88,17 @@ dependencies:
       - zap::ztm_stepper
       - zap::ztm_psu_hv
       - zap::ztm_psu_tec
+      - zap::pico_ztpico2
+      - zap::pico_ztpico2_ztm_psu_tec
+      - zap::pico_ztpico2_ztm_pwm
+      - zap::pico_ztpico2_ztm_adc
+      - zap::pico_ztpico2_ztm_stepper
+      - zap::registry
+      - zap::cli
+      - zap::pico_log
+      - zap::pico_network
+  pico-sdk:
+    type: git
+    uri: https://github.com/raspberrypi/pico-sdk.git
+    version: 2.3.0
+    components:

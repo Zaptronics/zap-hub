@@ -1,7 +1,7 @@
 #pragma once
 
 #include "zaptronics/modules/ztm_stepper.h"
-#include "ztmb/bus.h"
+#include "zaptronics/boards/ztpico2/bus.h"
 
 #ifdef __cplusplus
 extern "C" {

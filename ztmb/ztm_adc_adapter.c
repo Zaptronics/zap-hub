@@ -1,13 +1,11 @@
 #include "ztmb/ztm_adc_adapter.h"
 
-#include "hardware/spi.h"
 #include "ztmb/log.h"
-#include "ztmb/zap_adapter.h"
+#include "zaptronics/boards/ztpico2/ztm_adc.h"
 
 ztm_adc_t ztm_adc_1;
 
-static ztmb_zap_spi_t g_adc_spi;
-static ztmb_zap_lock_t g_adc_lock;
+static ztpico2_ztm_adc_t g_adc_adapter;
 
 static void log_error_bit(uint32_t mask, const char *message)
 {
@@ -77,40 +75,19 @@ static void adc_event(void *context, const ztm_adc_event_t *event)
 
 int ztmb_ztm_adc_init(void *ctx, void *spi, int8_t cs_pin, int8_t en_pin)
 {
-    if (!ctx || ctx != &ztm_adc_1 || !spi || cs_pin < 0) {
+    if (ctx != &ztm_adc_1 || !spi || cs_pin < 0) {
         return -1;
     }
 
-    const bus_spi_config_t spi_config = {
-        .baud_hz = 1000000u,
-        .data_bits = 8u,
-        .cpol = SPI_CPOL_1,
-        .cpha = SPI_CPHA_1,
-        .order = SPI_MSB_FIRST,
-        .cs_setup_us = 0u,
-        .cs_hold_us = 0u,
-        .cs_high_us = 1u,
-    };
-
-    if (!ztmb_zap_spi_init(&g_adc_spi,
-                           (spi_inst_t *)spi,
-                           (uint)cs_pin,
-                           en_pin,
-                           &spi_config,
-                           ZAP_SPI_DEFAULT_TIMEOUT_US,
-                           0u)) {
-        return -2;
-    }
-
-    ztmb_zap_lock_init(&g_adc_lock, ZTM_ADC_OPERATION_TIMEOUT_US);
-    const ztm_adc_config_t config = {
-        .spi = ztmb_zap_spi_device(&g_adc_spi),
-        .time = ztmb_zap_time(),
-        .lock = ztmb_zap_lock(&g_adc_lock),
+    const ztpico2_ztm_adc_config_t config = {
+        .board = ztpico2_active(),
+        .spi = (spi_inst_t *)spi,
+        .cs_mux_id = (uint)cs_pin,
+        .enable_pin = en_pin,
         .event_context = NULL,
         .event = adc_event,
     };
-    return ztm_adc_init(&ztm_adc_1, &config);
+    return ztpico2_ztm_adc_init(&g_adc_adapter, &ztm_adc_1, &config);
 }
 
 int ztmb_ztm_adc_poll(void)
@@ -125,5 +102,5 @@ int ztmb_ztm_adc_deinit(void)
 
 const bus_spi_t *ztmb_ztm_adc_bus(void)
 {
-    return &g_adc_spi.bus;
+    return &g_adc_adapter.spi.bus;
 }

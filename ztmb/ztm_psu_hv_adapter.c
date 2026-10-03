@@ -1,60 +1,26 @@
+#include "zaptronics/boards/ztpico2/connector.h"
 #include "ztmb/ztm_psu_hv_adapter.h"
 
 #include "hardware/i2c.h"
 #include "ztmb/adc.h"
-#include "ztmb/bus.h"
-#include "ztmb/io_exp.h"
+#include "zaptronics/boards/ztpico2/bus.h"
+#include "zaptronics/boards/ztpico2/io_exp.h"
 #include "ztmb/log.h"
-#include "ztmb/zap_adapter.h"
+#include "zaptronics/boards/ztpico2/zap_adapter.h"
 
 ztm_psu_hv_t ztm_psu_hv_1;
 
 static ztmb_zap_i2c_t g_hv_i2c;
 static ztmb_zap_lock_t g_hv_lock;
-static int8_t g_enable_pin = EX_HV_EN_1;
-static int8_t g_pgood_pin = EX_HV_PGOOD_1;
+static ztpico2_connector_t g_connector;
 
-static int hub_prepare(void *context)
-{
-    (void)context;
-    if (g_enable_pin < 0 || g_pgood_pin < 0) {
-        return -1;
-    }
 
-    /* Program the output latch low before selecting output mode. */
-    return pcal6416a_write_pin(&ioexp, (uint8_t)g_enable_pin, false) &&
-                   pcal6416a_set_pin_direction(&ioexp, (uint8_t)g_enable_pin, false) &&
-                   pcal6416a_set_pin_direction(&ioexp, (uint8_t)g_pgood_pin, true)
-               ? 0
-               : -1;
-}
 
-static int hub_enable_set(void *context, bool enabled)
-{
-    (void)context;
-    return g_enable_pin >= 0 &&
-                   pcal6416a_write_pin(&ioexp, (uint8_t)g_enable_pin, enabled)
-               ? 0
-               : -1;
-}
 
-static int hub_enable_get(void *context, bool *enabled)
-{
-    (void)context;
-    return enabled != NULL && g_enable_pin >= 0 &&
-                   pcal6416a_read_pin(&ioexp, (uint8_t)g_enable_pin, enabled)
-               ? 0
-               : -1;
-}
 
-static int hub_pgood_read(void *context, bool *pgood)
-{
-    (void)context;
-    return pgood != NULL && g_pgood_pin >= 0 &&
-                   pcal6416a_read_pin(&ioexp, (uint8_t)g_pgood_pin, pgood)
-               ? 0
-               : -1;
-}
+
+
+
 
 static int hub_vsense_read(void *context, uint16_t *adc_code, uint32_t *drive_uV)
 {
@@ -102,8 +68,9 @@ int ztmb_ztm_psu_hv_init(void *ctx, void *i2c, int8_t addr, int8_t en_pin)
         return -1;
     }
 
-    g_enable_pin = en_pin;
-    g_pgood_pin = EX_HV_PGOOD_1;
+    g_connector=(ztpico2_connector_t){
+        .board=ztpico2_active(), .enable_pin=en_pin, .input_pin=EX_HV_PGOOD_1
+    };
 
     if (!ztmb_zap_i2c_init(&g_hv_i2c,
                            (i2c_inst_t *)i2c,
@@ -118,11 +85,11 @@ int ztmb_ztm_psu_hv_init(void *ctx, void *i2c, int8_t addr, int8_t en_pin)
         .time = ztmb_zap_time(),
         .lock = ztmb_zap_lock(&g_hv_lock),
         .address_straps = (uint8_t)addr & 0x03u,
-        .control_context = NULL,
-        .prepare = hub_prepare,
-        .enable_set = hub_enable_set,
-        .enable_get = hub_enable_get,
-        .pgood_read = hub_pgood_read,
+        .control_context = &g_connector,
+        .prepare = ztpico2_connector_prepare,
+        .enable_set = ztpico2_connector_enable_set,
+        .enable_get = ztpico2_connector_enable_get,
+        .pgood_read = ztpico2_connector_input_read,
         .vsense_read = hub_vsense_read,
         .event_context = NULL,
         .event = hub_event,

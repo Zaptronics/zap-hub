@@ -1,5 +1,6 @@
 // web_assets.h
 #pragma once
+
 #include <stddef.h>
 #include <stdint.h>
 

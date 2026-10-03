@@ -11,6 +11,7 @@ typedef enum pump_state_t {
     PUMP_FILTER_FAST,
     PUMP_FILTER_NORMAL,
     PUMP_SUMP_ON,
+    PUMP_WICK_WET,
 } pump_state_t;
 
 typedef struct {
@@ -33,6 +34,8 @@ bool pumping_filter_start_fast(void);
 bool pumping_filter_stop(void);
 bool pumping_wick_prime(void);
 bool pumping_wick_dose(void);
+/* Continuous forward wetting; stopped by wick-stop or stop-all. */
+bool pumping_wick_wet(void);
 bool pumping_wick_drain(void);
 bool pumping_wick_stop(void);
 bool pumping_sump_run(void);

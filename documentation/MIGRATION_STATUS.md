@@ -1,56 +1,68 @@
-Release update: ZapEE v0.6.0 is published and Hub v0.2.29 now pins that Git tag.
-Hardware regression remains pending. The notes below record the development integration.
+# Hub 0.3.7 / ZapEE 0.11.0 migration status
 
-# Migration status — 2026-09-10
+## Previous ADC migration
 
-## Current integration
+ADC SPI and operation-lock setup now lives in zap::pico_ztpico2_ztm_adc.
+Hub retains its instance, event/error text, registry callbacks, bus accessor
+and chamber measurement assignments. SPI timing, timeouts and portable module
+initialization remain unchanged. No power sequencing is added; EX_NONE is
+preserved. Each consumer owns persistent binding and module storage.
 
-The working tree consumes five ZapEE modules: PWM, ADC, stepper, HV PSU and TEC
-PSU. The last three are unreleased local changes. Their old Hub implementations
-have been removed, and Hub adapters provide routing, enable controls, sensing,
-and logging. The L6470 module uses framed SPI: reserve the fabric for a sequence,
-with a distinct CS pulse per physical frame.
+## Previous PWM migration
 
-Zap's local source is authoritative for tooling. It still uses `zap-package.yml`
-for package metadata (schema 1 remains valid without package dependencies),
-and `zap.yml` schema 5 for project configuration. The new driver/module entries
-are now present in ZapEE's package manifest. Hub uses a sibling path dependency;
-Zap regenerated the lockfile and CMake integration from it.
+PWM I2C and connector setup now lives in zap::pico_ztpico2_ztm_pwm.
+Hub retains its singleton, active-low EX_I2C_ALT_IO_1 IRQ assignment, event
+messages and registry callbacks. The Hub wrapper rejects other module pointers
+to prevent reuse of its singleton binding; other consumers own their bindings.
+Bus defaults and connector preparation ordering are preserved. No new operation
+locking or module startup policy is introduced.
 
-## Validation
+## Previous TEC migration
 
-- Current Zap source compiled locally into the ignored Hub/zap.exe.
-- Zap sync and offline verification succeed against ../ZapEE.
-- ZapEE's 14 host tests pass in a fresh MSVC Debug build, with assertions enabled.
-- Hub Release builds for pico2_w using Pico SDK 2.3.0 and GCC 15.2.1.
-- No hardware upload or electrical regression test has been performed in this session.
+The ZTPICO2 TEC PSU SPI/lock/connector setup now lives in the optional
+zap::pico_ztpico2_ztm_psu_tec component. Hub retains its four module instances,
+their registry callbacks, connector assignments and buffered-reference/1x-gain
+selection. No output-control policy moved out of Hub.
 
-The migration review also found a TEC status regression: if EN went low but DAC
-shutdown failed, Hub retained the old enabled state. Hub now reads the module
-status after stop, retaining the distinction between EN and DAC shutdown.
+The adapter takes explicit board, module and binding storage; it has no Hub
+includes, module inventory, logging or fixed instance count. Each module needs
+a distinct binding with a stable address. The underlying motherboard still
+supports one active physical board per MCU.
 
-## Hardware gate before release
+SPI mode 0, MCP4901 baud rate, one-microsecond CS-high time, default transport
+timeout, 500000-us operation lock and connector-disable-before-init sequence
+are preserved for Hub. Invalid board/endpoints are rejected before GPIO access.
 
-Exercise stepper slot order, run/move/stop, reset/configuration restore, KVAL and
-microstep changes, fault polling, and inactive driver 4. Verify HV enable,
-power-good and voltage feedback behavior, plus all four TEC outputs and their
-shutdown behavior. After validation, release ZapEE and replace the development
-path with the actual Git tag/commit through Zap, regenerating the lockfile.
+## Remaining adapter work
 
-## Next boundary: ZTPICO2 support
+- HV PSU: separate its transport/connector binding from Hub VSENSE selection,
+  divider ratio and event reporting before moving it.
+- ztmb/adc.c: the reusable conversion already calls ztpico2_adc_read. Its legacy
+  channel-1/7500-ratio convenience entry point is application-specific; review
+  its callers before removing or replacing it.
 
-The schematic is locally available at ../ZapEE/schematics/ZTPICO2.kicad_sch.
-It is currently ignored by Git. Component/net inspection confirms the onboard
-PCAL6416, TLA2518, CS routing and the module connector functions; a complete
-pin-by-pin audit remains to be done before changing board initialization.
+Chamber logic, inventory, credentials and web assets remain in Hub.
 
-Extract PCAL6416 and TLA2518 against portable transport contracts, then put
-ZTPICO2 pin definitions, bus setup, CS routing, onboard ADC/expander and module
-bindings into a dedicated board-support component. Keep chamber module inventory,
-TEC voltage-divider mappings where application-specific, pump assignments, and
-control sequencing in Hub. Do not move the whole ztmb directory wholesale:
-it also contains application registration, command handling and network services.
+## Stepper migration in this change
 
-After that boundary is proven, separate reusable lifecycle/console services.
-Sensor acquisition is still a placeholder in sensing_update(); chamber state,
-closed-loop cooling and coordinated supervision remain application work.
+Framed SPI, operation locking and context-based power control now live in the
+optional zap::pico_ztpico2_ztm_stepper component. Hub retains its instance,
+connector assignments, event text, registry callbacks and bus accessor.
+The portable stepper module and shared transport implementation are unchanged.
+SPI mode 3, 1 MHz, 8-bit MSB-first, zero setup/hold, 1-us CS-high,
+default transport timeout, zero read-fill and 5000-us operation lock are retained.
+The existing off/1-ms/on/1-ms/reset/1-ms/defaults sequence remains in the module.
+
+## User handoff
+
+Run your current Zap executable from Hub: zap sync --no-configure.
+Generated dependency files were not edited; sync refreshes the selected component
+and package metadata before your normal build. Hub's 0.3.6 managed SDK setup is retained.
+
+The previous notes record user-confirmed TEC and PWM builds. ADC build confirmation
+is still unverified. Validation of this change was not run: no configure, build,
+test, Git operation or rollback-patch application. Hardware regression is skipped.
+
+Rollback this change using Hub_0.3.7_stepper-adapter-migration.patch and
+ZapEE_0.11.0_stepper-adapter-migration.patch in the respective patches folders.
+Reverse both patches; if dependency files were synced, sync again after rollback.

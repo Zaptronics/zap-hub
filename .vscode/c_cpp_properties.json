@@ -4,6 +4,7 @@
             "name": "Pico",
             "includePath": [
                 "${workspaceFolder}/**",
+                "${workspaceFolder}/../ZapEE/include",
                 "${userHome}/.pico-sdk/sdk/2.3.0/**"
             ],
             "forcedInclude": [

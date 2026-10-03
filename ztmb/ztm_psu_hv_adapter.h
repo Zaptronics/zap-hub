@@ -1,6 +1,7 @@
 #pragma once
 
 #include "zaptronics/modules/ztm_psu_hv.h"
+#include "zaptronics/boards/ztpico2/pins.h"
 
 #ifdef __cplusplus
 extern "C" {

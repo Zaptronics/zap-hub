@@ -17,6 +17,11 @@ typedef struct {
 int cooling_init(void);
 int cooling_update(void);
 bool cooling_ready(void);
+/* Confirmation asserts that the operator checked chiller temperature and flow.
+ * Grant does not start a TEC. Revocation stops all and remains locked on error. */
+bool cooling_tec_permission_granted(void);
+bool cooling_tec_confirm_chiller(void);
+bool cooling_tec_revoke_permission(void);
 
 bool cooling_tec_set_raw(uint8_t channel_id,
                          uint8_t dac_code,

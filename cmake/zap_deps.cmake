@@ -40,29 +40,19 @@ if(NOT IS_ABSOLUTE "${ZAP_DEPS_DIR}")
     set(ZAP_DEPS_DIR "${CMAKE_SOURCE_DIR}/${ZAP_DEPS_DIR}")
 endif()
 
-set(_zap_zapee_local "")
-if(EXISTS "${ZAP_DEPS_DIR}/zapee/CMakeLists.txt")
-    set(_zap_zapee_local "${ZAP_DEPS_DIR}/zapee")
+# pico-sdk is imported before project() and initialized by pico_sdk_init().
+
+# zapee · local path
+set(_zap_zapee_source [[../ZapEE]])
+file(TO_CMAKE_PATH "${_zap_zapee_source}" _zap_zapee_source)
+if(NOT IS_ABSOLUTE "${_zap_zapee_source}")
+    get_filename_component(_zap_zapee_source "${_zap_zapee_source}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
 endif()
-if(_zap_zapee_local)
-    FetchContent_Declare(
-        zapee
-        SOURCE_DIR "${_zap_zapee_local}"
-        BINARY_DIR "${CMAKE_BINARY_DIR}/_zapdeps/zapee"
-    )
-else()
-    if(ZAP_VERIFY_DEPENDENCIES OR ZAP_OFFLINE)
-        message(FATAL_ERROR "Managed Git dependency is missing CMakeLists.txt; run 'zap sync' before configuring.")
-    endif()
-    # Requested: v0.6.0; resolved: v0.6.0; locked commit: 215de47b34a828cbe33877e994571d91e738fbc1
-    FetchContent_Declare(
-        zapee
-        GIT_REPOSITORY [[git@github.com:Zaptronics/zap-ee.git]]
-        GIT_TAG        [[215de47b34a828cbe33877e994571d91e738fbc1]]
-        GIT_PROGRESS   TRUE
-        BINARY_DIR     "${CMAKE_BINARY_DIR}/_zapdeps/zapee"
-    )
-endif()
+FetchContent_Declare(
+    zapee
+    SOURCE_DIR     "${_zap_zapee_source}"
+    BINARY_DIR     "${CMAKE_BINARY_DIR}/_zapdeps/zapee"
+)
 FetchContent_MakeAvailable(zapee)
 
 function(zap_apply_dependencies target_name)
@@ -74,4 +64,13 @@ function(zap_apply_dependencies target_name)
     set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::ztm_stepper)
     set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::ztm_psu_hv)
     set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::ztm_psu_tec)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_ztpico2)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_ztpico2_ztm_psu_tec)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_ztpico2_ztm_pwm)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_ztpico2_ztm_adc)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_ztpico2_ztm_stepper)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::registry)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::cli)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_log)
+    set_property(TARGET "${target_name}" APPEND PROPERTY LINK_LIBRARIES zap::pico_network)
 endfunction()

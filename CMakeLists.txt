@@ -70,12 +70,15 @@ add_custom_target(generate_web_assets DEPENDS ${GENERATED_ASSETS})
 # ====================================================================================
 set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
+# Select the locked SDK after the VS Code defaults, before SDK import/project.
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/zap_sdk.cmake")
+
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
 project(Hub C CXX ASM)
 
-set(HUB_FIRMWARE_VERSION "0.2.29")
+set(HUB_FIRMWARE_VERSION "0.6.4")
 set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
 configure_file(
@@ -113,6 +116,10 @@ configure_file(
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+# Application-owned configuration, supplied through ZapEE's public option.
+set(ZAPEE_PICO_NETWORK_CONFIG_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH
+    "Directory containing the application's lwipopts.h")
+
 # Optional Zap helper integration. `zap.yml` is the friendly dependency manifest;
 # cmake/zap_deps.cmake is generated from it and remains ordinary CMake so the
 # helper is never mandatory for experienced users or CI systems.
@@ -131,13 +138,7 @@ add_executable(Hub
     sensing.c
     sweeping.c
     ztmb/log.c
-    ztmb/bus.c
-    ztmb/zap_adapter.c
-    ztmb/io_exp.c
-    ztmb/cs_mux.c
     ztmb/adc.c
-    drivers/tla2518.c
-    drivers/pcal6416.c
     ztmb/ztm_psu_hv_adapter.c
     ztmb/ztm_pwm_adapter.c
     ztmb/ztm_adc_adapter.c
@@ -145,7 +146,6 @@ add_executable(Hub
     ztmb/ztm_stepper_adapter.c
     ztmb/cli_wifi.c
     ztmb/cli_cmds.c
-    ztmb/http_server.c
     ztmb/web_assets.c
     ztmb/modules.c
     ztmb/ztmb.c
@@ -169,6 +169,23 @@ set_target_properties(Hub PROPERTIES
 pico_enable_stdio_uart(Hub 1)
 pico_enable_stdio_usb(Hub 0)
 
+
+# The network component needs this application's lwipopts.h.
+set(_hub_missing_targets "")
+foreach(_hub_target zap::pico_ztpico2 zap::pico_network
+        zap::pico_ztpico2_ztm_psu_tec zap::pico_ztpico2_ztm_pwm zap::pico_ztpico2_ztm_adc zap::pico_ztpico2_ztm_stepper)
+    if(NOT TARGET ${_hub_target})
+        list(APPEND _hub_missing_targets ${_hub_target})
+    endif()
+endforeach()
+if(_hub_missing_targets)
+    if(NOT TARGET pico_cyw43_arch_lwip_threadsafe_background)
+        message(FATAL_ERROR "Missing targets: ${_hub_missing_targets}. Pico SDK at '${PICO_SDK_PATH}' has no CYW43/lwIP wireless support. Run zap sync --no-configure with Zap 0.11.0 or newer to initialize SDK submodules.")
+    endif()
+    message(FATAL_ERROR "Missing ZapEE targets: ${_hub_missing_targets}. Check the ZapEE dependency path and selected components in zap.yml, then run zap sync --no-configure.")
+endif()
+
+target_link_libraries(Hub zap::pico_ztpico2 zap::pico_ztpico2_ztm_psu_tec zap::pico_ztpico2_ztm_pwm zap::pico_ztpico2_ztm_adc zap::pico_ztpico2_ztm_stepper zap::registry zap::cli zap::pico_log zap::pico_network)
 
 # Add the standard library to the build
 target_link_libraries(Hub

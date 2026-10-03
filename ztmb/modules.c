@@ -3,8 +3,8 @@
 #include "pico/stdlib.h"
 #include "modules.h"
 #include "ztmb/log.h"
-#include "ztmb/cs_lines.h"
-#include "ztmb/io_exp.h"
+#include "zaptronics/boards/ztpico2/pins.h"
+#include "zaptronics/boards/ztpico2/io_exp.h"
 
 #include "ztmb/ztm_adc_adapter.h"
 #include "ztmb/ztm_psu_hv_adapter.h"
@@ -106,173 +106,22 @@ static module_entry_t g_modules[] = {
 #define MODULE_COUNT (sizeof(g_modules) / sizeof(g_modules[0]))
 
 static bool g_module_inited[MODULE_COUNT];
-
-int modules_init_all(bool rollback_on_fail)
+static void registry_event(void *context, const module_entry_t *entry, const char *operation, int rc)
 {
-    memset(g_module_inited, 0, sizeof(g_module_inited));
-    int first_error = 0;
-
-    for (size_t i = 0; i < MODULE_COUNT; i++) {
-        module_entry_t *module = &g_modules[i];
-        if (!module->init) {
-            continue;
-        }
-
-        int rc = module->init(module->mod_inst, module->bus_ctx, module->addr, module->en_pin);
-        if (rc != 0) {
-            log_printf("Module init failed: %s, rc=%d\n", module->short_name, rc);
-            if (first_error == 0) {
-                first_error = rc;
-            }
-
-            if (rollback_on_fail) {
-                for (size_t j = i; j-- > 0;) {
-                    module_entry_t *previous = &g_modules[j];
-                    if (g_module_inited[j] && previous->deinit) {
-                        (void)previous->deinit();
-                    }
-                    g_module_inited[j] = false;
-                }
-                return rc;
-            }
-
-            /* Continue so independently fitted modules remain testable. */
-            continue;
-        }
-
-        g_module_inited[i] = true;
-        log_printf("Module ready: %s\n", module->short_name);
-    }
-
-    return first_error;
+    (void)context;
+    log_printf("Module %s: %s rc=%d\n", operation, entry->short_name, rc);
 }
-
-int modules_poll_all(void)
-{
-    int errors = 0;
-
-    for (size_t i = 0; i < MODULE_COUNT; i++) {
-        module_entry_t *module = &g_modules[i];
-        if (!g_module_inited[i] || !module->poll) {
-            continue;
-        }
-
-        int rc = module->poll();
-        if (rc != 0) {
-            errors++;
-            log_printf("Module poll failed: %s, rc=%d\n", module->short_name, rc);
-        }
-        log_poll();
-    }
-
-    return errors;
-}
-
-int modules_deinit_all(void)
-{
-    int errors = 0;
-
-    for (size_t i = MODULE_COUNT; i-- > 0;) {
-        module_entry_t *module = &g_modules[i];
-        if (!g_module_inited[i]) {
-            continue;
-        }
-
-        if (module->deinit && module->deinit() != 0) {
-            errors++;
-        }
-        g_module_inited[i] = false;
-    }
-
-    return errors;
-}
-
-
-static int module_index_by_short_name(const char *short_name)
-{
-    if (!short_name) {
-        return -1;
-    }
-    for (size_t i = 0; i < MODULE_COUNT; i++) {
-        if (g_modules[i].short_name && strcmp(g_modules[i].short_name, short_name) == 0) {
-            return (int)i;
-        }
-    }
-    return -1;
-}
-
-int modules_deinitialize_by_short_name(const char *short_name)
-{
-    int index = module_index_by_short_name(short_name);
-    if (index < 0) {
-        return -1;
-    }
-
-    module_entry_t *module = &g_modules[index];
-    int rc = 0;
-    if (module->deinit) {
-        rc = module->deinit();
-    }
-    g_module_inited[index] = false;
-    return rc;
-}
-
-int modules_reinitialize_by_short_name(const char *short_name)
-{
-    int index = module_index_by_short_name(short_name);
-    if (index < 0) {
-        return -1;
-    }
-
-    module_entry_t *module = &g_modules[index];
-    if (module->deinit) {
-        (void)module->deinit();
-    }
-    g_module_inited[index] = false;
-
-    if (!module->init) {
-        return -2;
-    }
-
-    int rc = module->init(module->mod_inst, module->bus_ctx, module->addr, module->en_pin);
-    if (rc == 0) {
-        g_module_inited[index] = true;
-        log_printf("Module ready: %s\n", module->short_name);
-    } else {
-        log_printf("Module reinit failed: %s, rc=%d\n", module->short_name, rc);
-    }
-    return rc;
-}
-
-module_entry_t *modules_find_by_short_name(const char *short_name)
-{
-    if (!short_name) {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < MODULE_COUNT; i++) {
-        if (g_module_inited[i] &&
-            g_modules[i].short_name &&
-            strcmp(g_modules[i].short_name, short_name) == 0) {
-            return &g_modules[i];
-        }
-    }
-
-    return NULL;
-}
-
-
-size_t modules_count(void)
-{
-    return MODULE_COUNT;
-}
-
-const module_entry_t *modules_get(size_t index)
-{
-    return index < MODULE_COUNT ? &g_modules[index] : NULL;
-}
-
-bool modules_is_initialized(size_t index)
-{
-    return index < MODULE_COUNT && g_module_inited[index];
-}
+static void registry_yield(void *context) { (void)context; log_poll(); }
+static zap_registry_t registry = {
+    .entries=g_modules, .initialized=g_module_inited, .count=MODULE_COUNT,
+    .event=registry_event, .yield=registry_yield
+};
+int modules_init_all(bool rollback) { return zap_registry_init_all(&registry,rollback); }
+int modules_poll_all(void) { return zap_registry_poll_all(&registry); }
+int modules_deinit_all(void) { return zap_registry_deinit_all(&registry); }
+int modules_reinitialize_by_short_name(const char *name) { return zap_registry_reinitialize(&registry,name); }
+int modules_deinitialize_by_short_name(const char *name) { return zap_registry_deinitialize(&registry,name); }
+module_entry_t *modules_find_by_short_name(const char *name) { return zap_registry_find(&registry,name); }
+size_t modules_count(void) { return registry.count; }
+const module_entry_t *modules_get(size_t i) { return zap_registry_get(&registry,i); }
+bool modules_is_initialized(size_t i) { return zap_registry_is_initialized(&registry,i); }

@@ -1,0 +1,4 @@
+*
+!.gitignore
+!signers.json
+!hash.json

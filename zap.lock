@@ -2,25 +2,49 @@
 schema: 1
 
 dependencies:
-  zapee:
+  pico-sdk:
     type: git
-    uri: "git@github.com:Zaptronics/zap-ee.git"
+    uri: https://github.com/raspberrypi/pico-sdk.git
     direct: true
-    root_requested: v0.6.0
+    root_requested: 2.3.0
     requested:
-      - v0.6.0
-    resolved: v0.6.0
-    commit: 215de47b34a828cbe33877e994571d91e738fbc1
-    manifest_sha256: 238b91289d48fe7e8c6f1a59df4986e1d021239d65f4c154b0a7b1c995e74cad
+      - 2.3.0
+    resolved: 2.3.0
+    commit: 98a542c1a62fb549ffb5d66a3e5892b06276b670
+    parents:
+      - root
+  zapee:
+    type: path
+    uri: ../ZapEE
+    direct: true
+    manifest_sha256: 5d5176d91fa5c82fced4e23b288b354e9f6c5f0fa5ccc28f733d12e9adc8d542
     zephyr_module: true
     root_zephyr_module: true
     root_components:
+      - zap::cli
+      - zap::pico_log
+      - zap::pico_network
+      - zap::pico_ztpico2
+      - zap::pico_ztpico2_ztm_adc
+      - zap::pico_ztpico2_ztm_psu_tec
+      - zap::pico_ztpico2_ztm_pwm
+      - zap::pico_ztpico2_ztm_stepper
+      - zap::registry
       - zap::ztm_adc
       - zap::ztm_psu_hv
       - zap::ztm_psu_tec
       - zap::ztm_pwm
       - zap::ztm_stepper
     components:
+      - zap::cli
+      - zap::pico_log
+      - zap::pico_network
+      - zap::pico_ztpico2
+      - zap::pico_ztpico2_ztm_adc
+      - zap::pico_ztpico2_ztm_psu_tec
+      - zap::pico_ztpico2_ztm_pwm
+      - zap::pico_ztpico2_ztm_stepper
+      - zap::registry
       - zap::ztm_adc
       - zap::ztm_psu_hv
       - zap::ztm_psu_tec

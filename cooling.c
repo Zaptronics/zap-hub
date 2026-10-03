@@ -7,6 +7,7 @@
 #include "ztmb/adc.h"
 #include "ztmb/ztm_psu_tec_adapter.h"
 #include "cooling.h"
+#include "zaptronics/boards/ztpico2/pins.h"
 
 #define COOLING_TEC_SETTLE_US 100000u
 
@@ -16,7 +17,7 @@ static bool g_enabled[COOLING_TEC_COUNT];
 static bool g_ready;
 
 /* PCB mapping: TEC1..4 VSENSE are connected to TLA2518 AIN5,4,3,2. */
-static const uint8_t g_vsense_channels[COOLING_TEC_COUNT] = { 5u, 4u, 3u, 2u };
+static const uint8_t g_vsense_channels[COOLING_TEC_COUNT] = { ZTPICO2_TEC1_SENSE_CHANNEL, ZTPICO2_TEC2_SENSE_CHANNEL, ZTPICO2_TEC3_SENSE_CHANNEL, ZTPICO2_TEC4_SENSE_CHANNEL };
 
 static bool cooling_index(uint8_t channel_id, size_t *index)
 {
@@ -61,6 +62,7 @@ int cooling_init(void)
         "psu_tec_4",
     };
 
+    (void)ztmb_tec_revoke_permission();
     g_ready = false;
     for (size_t i = 0; i < COOLING_TEC_COUNT; i++) {
         g_peltiers[i] = modules_find_by_short_name(names[i]);
@@ -92,6 +94,25 @@ int cooling_update(void)
 bool cooling_ready(void)
 {
     return g_ready;
+}
+
+bool cooling_tec_permission_granted(void)
+{
+    return ztmb_tec_permission_granted();
+}
+
+bool cooling_tec_confirm_chiller(void)
+{
+    if (!g_ready || !ztmb_tec_grant_permission()) {
+        (void)cooling_tec_stop_all();
+        return false;
+    }
+    return true;
+}
+
+bool cooling_tec_revoke_permission(void)
+{
+    return cooling_tec_stop_all();
 }
 
 bool cooling_tec_read(uint8_t channel_id, cooling_tec_status_t *status)
@@ -129,7 +150,7 @@ bool cooling_tec_set_raw(uint8_t channel_id,
                          cooling_tec_status_t *status)
 {
     size_t index;
-    if (!g_ready || !cooling_index(channel_id, &index)) {
+    if (!g_ready || !cooling_tec_permission_granted() || !cooling_index(channel_id, &index)) {
         return false;
     }
 
@@ -140,7 +161,7 @@ bool cooling_tec_set_raw(uint8_t channel_id,
 
     if (!ztm_psu_tec_start(device, dac_code, COOLING_TEC_SETTLE_US)) {
         /* Best-effort recovery through the authoritative enable-off path. */
-        (void)cooling_tec_stop(channel_id);
+        (void)cooling_tec_stop_all();
         return false;
     }
 
@@ -152,7 +173,7 @@ bool cooling_tec_set_raw(uint8_t channel_id,
     }
 
     if (!cooling_tec_read(channel_id, status)) {
-        (void)cooling_tec_stop(channel_id);
+        (void)cooling_tec_stop_all();
         return false;
     }
     return true;
@@ -161,7 +182,7 @@ bool cooling_tec_set_raw(uint8_t channel_id,
 bool cooling_tec_set_all_raw(uint8_t dac_code,
                              cooling_tec_status_t status[COOLING_TEC_COUNT])
 {
-    if (!g_ready) {
+    if (!g_ready || !cooling_tec_permission_granted()) {
         return false;
     }
 
@@ -227,13 +248,22 @@ bool cooling_tec_stop(uint8_t channel_id)
 
 bool cooling_tec_stop_all(void)
 {
-    if (!g_ready) {
-        return false;
-    }
-
-    bool all_ok = true;
-    for (uint8_t channel_id = 1u; channel_id <= COOLING_TEC_COUNT; channel_id++) {
-        all_ok = cooling_tec_stop(channel_id) && all_ok;
+    /* Independent EN-low path also works when cooling initialization failed.
+     * Never skip remaining devices after any individual failure. */
+    bool all_ok = ztmb_tec_revoke_permission();
+    if (g_ready) {
+        for (uint8_t channel_id = 1u; channel_id <= COOLING_TEC_COUNT; channel_id++)
+            all_ok = cooling_tec_stop(channel_id) && all_ok;
+    } else {
+        ztm_psu_tec_t *devices[] = {
+            &ztm_psu_tec_1, &ztm_psu_tec_2, &ztm_psu_tec_3, &ztm_psu_tec_4
+        };
+        for (size_t i = 0; i < COOLING_TEC_COUNT; ++i) {
+            if (ztm_psu_tec_ready(devices[i]))
+                all_ok = ztm_psu_tec_stop(devices[i]) && all_ok;
+            else
+                all_ok = false;
+        }
     }
     return all_ok;
 }

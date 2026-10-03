@@ -7,7 +7,7 @@
 
 #include "ztmb/cli_cmds.h"
 #include "ztmb/modules.h"
-#include "ztmb/io_exp.h"
+#include "zaptronics/boards/ztpico2/io_exp.h"
 
 #include "ztmb/ztm_stepper_adapter.h"
 #include "ztmb/ztm_adc_adapter.h"
@@ -22,8 +22,13 @@
    Console output helpers
    ========================================================= */
 
+/* The dashboard owns terminal output while visible. Its renderer has a
+ * separate buffer; ordinary command reports must not scroll over that screen. */
+static bool console_screen_active;
+
 static void console_printf(const char *fmt, ...)
 {
+    if (console_screen_active) return;
     char buffer[256];
     va_list args;
     va_start(args, fmt);
@@ -649,6 +654,7 @@ static const char *pump_state_name(pump_state_t state)
         case PUMP_FILTER_FAST:   return "fast";
         case PUMP_WICK_PRIME:    return "prime";
         case PUMP_WICK_DOSE:     return "dose";
+        case PUMP_WICK_WET:      return "wet";
         case PUMP_WICK_DRAIN:    return "drain";
         case PUMP_SUMP_ON:       return "running";
         case PUMP_OFF:
@@ -661,7 +667,7 @@ static const char *pump_wick_direction_name(pump_state_t state)
     if (state == PUMP_WICK_DRAIN) {
         return "rev";
     }
-    if (state == PUMP_WICK_PRIME || state == PUMP_WICK_DOSE) {
+    if (state == PUMP_WICK_PRIME || state == PUMP_WICK_DOSE || state == PUMP_WICK_WET) {
         return "fwd";
     }
     return "---";
@@ -685,13 +691,15 @@ static int cmd_pump_status(int argc, char **argv, char *out, size_t out_len)
     console_printf("\r\nPumping subsystem: %s\r\n", pumping_ready() ? "READY" : "NOT READY");
     console_printf("  IPA filter  motor 1: %-7s fwd %u steps/s\r\n",
                    pump_state_name(status.filter_state), (unsigned)status.filter_speed);
-    console_printf("  IPA sump    motor 2: %-7s fwd %u steps/s\r\n",
+    console_printf("  IPA sump    motor 3: %-7s fwd %u steps/s\r\n",
                    pump_state_name(status.sump_state), (unsigned)status.sump_speed);
-    console_printf("  IPA wick    motor 3: %-7s %s %u steps/s, %u ms remaining\r\n",
+    console_printf("  IPA wick    motor 2: %-7s %s %u steps/s, %u ms remaining\r\n",
                    pump_state_name(status.wick_state),
                    pump_wick_direction_name(status.wick_state),
                    (unsigned)status.wick_speed,
                    (unsigned)status.wick_remaining_ms);
+    if (status.wick_state == PUMP_WICK_WET)
+        console_printf("  Wick wetting is continuous; no stop timer is active.\r\n");
     console_printf("  Unused      motor 4: hard HiZ\r\n");
     return pumping_ready() ? 0 : -1;
 }
@@ -700,7 +708,7 @@ static int cmd_pump_filter_normal(int argc, char **argv, char *out, size_t out_l
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_filter_start_normal(),
-                               "IPA filter normal: motor 1 fwd 50 steps/s");
+                               "IPA filter normal: motor 1 fwd 30 steps/s");
 }
 
 static int cmd_pump_filter_fast(int argc, char **argv, char *out, size_t out_len)
@@ -720,21 +728,28 @@ static int cmd_pump_wick_prime(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_prime(),
-                               "IPA wick prime: motor 3 fwd 50 steps/s for 5000 ms");
+                               "IPA wick prime: motor 2 fwd 100 steps/s for 5000 ms");
 }
 
 static int cmd_pump_wick_dose(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_dose(),
-                               "IPA wick dose: motor 3 fwd 50 steps/s for 2000 ms");
+                               "IPA wick dose: motor 2 fwd 30 steps/s for 2000 ms");
 }
 
 static int cmd_pump_wick_drain(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_drain(),
-                               "IPA wick drain: motor 3 rev 50 steps/s for 5000 ms");
+                               "IPA wick drain: motor 2 rev 100 steps/s for 5000 ms");
+}
+
+static int cmd_pump_wick_wet(int argc, char **argv, char *out, size_t out_len)
+{
+    (void)argc; (void)argv; (void)out; (void)out_len;
+    return pump_command_result(pumping_wick_wet(),
+                               "IPA wick wet: motor 2 fwd 30 steps/s continuously; wick-stop to end");
 }
 
 static int cmd_pump_wick_stop(int argc, char **argv, char *out, size_t out_len)
@@ -747,7 +762,7 @@ static int cmd_pump_sump_run(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_sump_run(),
-                               "IPA sump running: motor 2 fwd 50 steps/s");
+                               "IPA sump running: motor 3 fwd 30 steps/s");
 }
 
 static int cmd_pump_sump_stop(int argc, char **argv, char *out, size_t out_len)
@@ -855,6 +870,46 @@ static void console_print_tec_status(uint8_t channel_id,
                    (unsigned long)millivolts);
 }
 
+static int cmd_tec_permit(int argc, char **argv, char *out, size_t out_len)
+{
+    (void)out; (void)out_len;
+    if (argc == 2) {
+        console_printf("\r\nTEC operator permission: %s\r\n",
+                       cooling_tec_permission_granted() ? "GRANTED" : "LOCKED");
+        console_printf("Verify Process Chiller is at temperature and coolant is circulating, then enter:\r\n"
+                       "  tec permit chiller-at-temperature-and-circulating\r\n"
+                       "Without coolant, TEC operation can destroy the machine.\r\n");
+        return 0;
+    }
+    if (argc != 3 || strcmp(argv[2], "chiller-at-temperature-and-circulating") != 0) {
+        console_printf("\r\nPermission not granted: explicit chiller confirmation phrase required.\r\n");
+        return -1;
+    }
+    bool ok = cooling_tec_confirm_chiller();
+    console_printf("\r\n%s\r\n", ok
+        ? "Operator confirmed chiller temperature and circulation. TEC permission granted; outputs unchanged."
+        : "Permission denied; TECs locked and all-off attempted. Check module/enable faults.");
+    return ok ? 0 : -1;
+}
+
+static int cmd_tec_revoke(int argc, char **argv, char *out, size_t out_len)
+{
+    (void)argc; (void)argv; (void)out; (void)out_len;
+    bool ok = cooling_tec_revoke_permission();
+    console_printf("\r\n%s\r\n", ok
+        ? "TEC permission revoked; all enables low and DACs shut down."
+        : "TEC permission revoked; STOP FAILED on one or more channels. Verify hardware OFF.");
+    return ok ? 0 : -1;
+}
+
+static bool cmd_tec_require_permission(void)
+{
+    if (cooling_tec_permission_granted()) return true;
+    console_printf("\r\nTEC LOCKED: operator must verify Process Chiller temperature and coolant circulation.\r\n"
+                   "Use 'tec permit' for the explicit confirmation command.\r\n");
+    return false;
+}
+
 static int cmd_tec_set(int argc, char **argv, char *out, size_t out_len)
 {
     (void)out;
@@ -869,8 +924,9 @@ static int cmd_tec_set(int argc, char **argv, char *out, size_t out_len)
     }
 
     cooling_tec_status_t status;
+    if (!cmd_tec_require_permission()) return -3;
     if (!cooling_tec_set_raw(channel_id, (uint8_t)value, &status)) {
-        console_printf("\r\nTEC %u set/readback failed; channel was stopped.\r\n",
+        console_printf("\r\nTEC %u set/readback failed; permission revoked and all-off attempted. Verify hardware OFF.\r\n",
                        (unsigned)channel_id);
         return -2;
     }
@@ -892,8 +948,9 @@ static int cmd_tec_set_all(int argc, char **argv, char *out, size_t out_len)
     }
 
     cooling_tec_status_t status[COOLING_TEC_COUNT];
+    if (!cmd_tec_require_permission()) return -3;
     if (!cooling_tec_set_all_raw((uint8_t)value, status)) {
-        console_printf("\r\nTEC set-all/readback failed; all TEC channels were stopped.\r\n");
+        console_printf("\r\nTEC set-all/readback failed; permission revoked and all-off attempted. Verify hardware OFF.\r\n");
         return -2;
     }
 
@@ -1193,10 +1250,10 @@ static int cmd_pwm_stop(int argc, char **argv, char *out, size_t out_len)
     (void)out; (void)out_len;
     if (argc == 2) {
         if (!ztm_pwm_stop_all(&ztm_pwm_1)) {
-            console_printf("\r\nFailed to stop all PWM outputs.\r\n");
+            console_printf("\r\nPWM stop failed: zero duty not confirmed on all outputs (POWER_SAFE rc=%d).\r\n", ztm_pwm_1.power_safe_rc);
             return -1;
         }
-        console_printf("\r\nAll low-side and fan PWM outputs stopped.\r\n");
+        console_printf("\r\nAll low-side and fan PWM duties set to 0%; physical fan stop not verified.\r\n");
         return 0;
     }
 
@@ -1373,7 +1430,7 @@ static int cmd_pwm_rpm(int argc, char **argv, char *out, size_t out_len)
                 console_printf("  Fan %u: READ ERROR\r\n", (unsigned)fan);
                 all_ok = false;
             } else if (status == ZTM_PWM_FAN_TACH_STALL) {
-                console_printf("  Fan %u: STALL (no valid tach, count=0x%04X)\r\n",
+                console_printf("  Fan %u: NO VALID TACH (count=0x%04X; fan may still be spinning)\r\n",
                                (unsigned)fan, (unsigned)count);
                 all_ok = false;
             } else {
@@ -1397,7 +1454,7 @@ static int cmd_pwm_rpm(int argc, char **argv, char *out, size_t out_len)
         return -3;
     }
     if (status == ZTM_PWM_FAN_TACH_STALL) {
-        console_printf("\r\nFan %u: STALL (no valid tach, count=0x%04X)\r\n",
+        console_printf("\r\nFan %u: NO VALID TACH (count=0x%04X; fan may still be spinning)\r\n",
                        (unsigned)fan, (unsigned)count);
         return -4;
     }
@@ -1542,11 +1599,29 @@ static const char *pwm_probe_pac_support(uint8_t product_id, uint8_t channels)
     return "unsupported topology";
 }
 
+static const char *pwm_power_safe_status(int rc)
+{
+    switch (rc) {
+        case 0: return "HIGH verified";
+        case ZTM_PWM_ERR_POWER_SAFE_TIMEOUT: return "ERROR: timeout waiting for HIGH";
+        case ZTM_PWM_ERR_POWER_SAFE_READ: return "ERROR: input read/configuration unavailable";
+        case ZTM_PWM_ERR_POWER_SAFE_LOW: return "ERROR: went LOW";
+        default: return "ERROR";
+    }
+}
+
+static bool pwm_raw_access_ready(void)
+{
+    if (ztm_pwm_operational(&ztm_pwm_1)) return true;
+    console_printf("\r\nPWM unavailable: initialize successfully with POWER_SAFE HIGH before raw access.\r\n");
+    return false;
+}
+
 static int cmd_pwm_probe(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
 
-    ztm_pwm_probe_result_t probe;
+    ztm_pwm_probe_result_t probe = {0};
     int rc = ztm_pwm_probe_devices(&ztm_pwm_1, &probe, true);
 
     console_printf("\r\nPWM raw device probe (safe even when module init has failed):\r\n");
@@ -1555,6 +1630,9 @@ static int cmd_pwm_probe(int argc, char **argv, char *out, size_t out_len)
                    probe.power_was_enabled ? "ON" : "OFF/unknown",
                    probe.enable_read_ok ? (probe.enable_high ? "ON" : "OFF") : "READ ERROR",
                    probe.power_temporarily_enabled ? (probe.power_restored_off ? "yes" : "ERROR") : "not required");
+    console_printf("  POWER_SAFE: %s (rc=%d)\r\n",
+                   pwm_power_safe_status(probe.power_safe_rc), probe.power_safe_rc);
+    if (probe.power_safe_rc != 0) return rc;
     console_printf("  Shared IRQ: %s\r\n",
                    probe.irq_read_ok ? (probe.irq_asserted ? "ASSERTED" : "inactive") : "READ ERROR");
 
@@ -1621,7 +1699,7 @@ static int cmd_pwm_i2c_scan(int argc, char **argv, char *out, size_t out_len)
         return -1;
     }
 
-    ztm_pwm_i2c_scan_result_t scan;
+    ztm_pwm_i2c_scan_result_t scan = {0};
     int rc = ztm_pwm_i2c_scan(&ztm_pwm_1, &scan, true);
     console_printf("\r\nI2C0 scan with PWM module powered:\r\n  ACK addresses:");
     bool any = false;
@@ -1639,6 +1717,8 @@ static int cmd_pwm_i2c_scan(int argc, char **argv, char *out, size_t out_len)
                    scan.power_was_enabled ? "ON" : "OFF/unknown",
                    scan.power_temporarily_enabled ? "yes" : "no",
                    scan.power_temporarily_enabled ? (scan.power_restored_off ? "yes" : "ERROR") : "not required");
+    console_printf("  POWER_SAFE: %s (rc=%d)\r\n",
+                   pwm_power_safe_status(scan.power_safe_rc), scan.power_safe_rc);
     console_printf("  Note: scan uses a dummy read; run 'pwm power cycle' before normal operation.\r\n");
     return rc < 0 ? rc : 0;
 }
@@ -1771,7 +1851,7 @@ static int cmd_pwm_tach(int argc, char **argv, char *out, size_t out_len)
                            (unsigned)fan, (unsigned)emc, (unsigned)local,
                            (unsigned)count, (unsigned)count, (unsigned long)rpm);
         } else if (status == ZTM_PWM_FAN_TACH_STALL) {
-            console_printf("  Fan %u EMC%u/FAN%u: count=%u (0x%04X), STALL\r\n",
+            console_printf("  Fan %u EMC%u/FAN%u: count=%u (0x%04X), NO VALID TACH (fan may still be spinning)\r\n",
                            (unsigned)fan, (unsigned)emc, (unsigned)local,
                            (unsigned)count, (unsigned)count);
             all_ok = false;
@@ -1819,6 +1899,7 @@ static int cmd_pwm_fan_open(int argc, char **argv, char *out, size_t out_len)
 
 static int cmd_pwm_fan_status(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint8_t first = 1u, last = ZTM_PWM_EMC_COUNT;
     if (argc > 3) {
@@ -1931,6 +2012,7 @@ static int cmd_pwm_irq_line(int argc, char **argv, char *out, size_t out_len)
 
 static int cmd_pwm_sx_read(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint32_t reg = 0, count = 1;
     if (argc < 3 || argc > 4 || !parse_u32(argv[2], &reg) || reg > 0x7Fu ||
@@ -1952,6 +2034,7 @@ static int cmd_pwm_sx_read(int argc, char **argv, char *out, size_t out_len)
 
 static int cmd_pwm_sx_write(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint32_t reg = 0, value = 0;
     if (argc != 4 || !parse_u32(argv[2], &reg) || reg > 0x7Du ||
@@ -1976,6 +2059,7 @@ static bool parse_pwm_device_index(const char *text, uint8_t max, uint8_t *index
 
 static int cmd_pwm_pac_read(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint8_t index = 0;
     uint32_t reg = 0, count = 0;
@@ -1999,6 +2083,7 @@ static int cmd_pwm_pac_read(int argc, char **argv, char *out, size_t out_len)
 
 static int cmd_pwm_pac_write(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint8_t index = 0;
     uint32_t reg = 0;
@@ -2025,6 +2110,7 @@ static int cmd_pwm_pac_write(int argc, char **argv, char *out, size_t out_len)
 
 static int cmd_pwm_emc_read(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint8_t index = 0;
     uint32_t reg = 0;
@@ -2046,6 +2132,7 @@ static int cmd_pwm_emc_read(int argc, char **argv, char *out, size_t out_len)
 
 static int cmd_pwm_emc_write(int argc, char **argv, char *out, size_t out_len)
 {
+    if (!pwm_raw_access_ready()) return -1;
     (void)out; (void)out_len;
     uint8_t index = 0;
     uint32_t reg = 0, value = 0;
@@ -3121,26 +3208,11 @@ static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
 
     console_printf("\r\nRequesting safe state...\r\n");
 
+    /* Revoke TEC permission first, even if other subsystems fail to stop. */
+    bool tec_ok = cooling_tec_revoke_permission();
     bool pump_state_ok = !pumping_ready() || pumping_all_stop();
     bool hiz_ok = !ztm_stepper_ready(&ztm_stepper_1) || ztm_stepper_hard_hiz_all(&ztm_stepper_1);
     bool stepper_ok = pump_state_ok && hiz_ok;
-
-    bool tec_ok = true;
-    if (cooling_ready()) {
-        /* Keeps cooling.c's tracked enable state consistent with hardware. */
-        tec_ok = cooling_tec_stop_all();
-    } else {
-        /* Cooling may be unavailable because one module failed; stop every fitted TEC. */
-        const char *tec_names[] = { "psu_tec_1", "psu_tec_2", "psu_tec_3", "psu_tec_4" };
-        for (size_t i = 0; i < sizeof(tec_names) / sizeof(tec_names[0]); i++) {
-            module_entry_t *entry = modules_find_by_short_name(tec_names[i]);
-            if (!entry || !entry->mod_inst) {
-                continue;
-            }
-            ztm_psu_tec_t *tec = (ztm_psu_tec_t *)entry->mod_inst;
-            tec_ok = ztm_psu_tec_stop(tec) && tec_ok;
-        }
-    }
 
     /* EN-low is authoritative even when the AD5282 did not initialize. */
     bool hv_ok = ztm_psu_hv_stop(&ztm_psu_hv_1);
@@ -3159,6 +3231,8 @@ static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
 
     return stepper_ok && tec_ok && hv_ok && pwm_ok && adc_ok ? 0 : -1;
 }
+
+#include "run_console.h"
 
 static int cmd_version(int argc, char **argv, char *out, size_t out_len)
 {
@@ -3225,21 +3299,24 @@ static const cli_cmd_t stepper_cmds[] = {
 
 static const cli_cmd_t pump_cmds[] = {
     { "status",        "show pump mapping, state, speed, and wick timer", cmd_pump_status },
-    { "filter-normal", "IPA filter: motor 1 fwd 50 steps/s", cmd_pump_filter_normal },
+    { "filter-normal", "IPA filter: motor 1 fwd 30 steps/s", cmd_pump_filter_normal },
     { "filter-fast",   "IPA filter: motor 1 fwd 100 steps/s", cmd_pump_filter_fast },
     { "filter-stop",   "stop IPA filter motor 1", cmd_pump_filter_stop },
-    { "wick-prime",    "IPA wick: motor 3 fwd 50 steps/s for 5000 ms", cmd_pump_wick_prime },
-    { "wick-dose",     "IPA wick: motor 3 fwd 50 steps/s for 2000 ms", cmd_pump_wick_dose },
-    { "wick-drain",    "IPA wick: motor 3 rev 50 steps/s for 5000 ms", cmd_pump_wick_drain },
-    { "wick-stop",     "stop IPA wick motor 3", cmd_pump_wick_stop },
-    { "sump-run",      "IPA sump: motor 2 fwd 50 steps/s", cmd_pump_sump_run },
-    { "sump-stop",     "stop IPA sump motor 2", cmd_pump_sump_stop },
+    { "wick-prime",    "IPA wick: motor 2 fwd 100 steps/s for 5000 ms", cmd_pump_wick_prime },
+    { "wick-dose",     "IPA wick: motor 2 fwd 30 steps/s for 2000 ms", cmd_pump_wick_dose },
+    { "wick-drain",    "IPA wick: motor 2 rev 100 steps/s for 5000 ms", cmd_pump_wick_drain },
+    { "wick-wet",      "IPA wick: motor 2 fwd 30 steps/s continuously until stopped", cmd_pump_wick_wet },
+    { "wick-stop",     "stop IPA wick motor 2", cmd_pump_wick_stop },
+    { "sump-run",      "IPA sump: motor 3 fwd 30 steps/s", cmd_pump_sump_run },
+    { "sump-stop",     "stop IPA sump motor 3", cmd_pump_sump_stop },
     { "stop-all",      "stop motors 1..3 and keep motor 4 in HiZ", cmd_pump_stop_all },
-    { "start",         "compatibility alias: [1=filter, 2=sump, 3=wick dose]", cmd_pump_start },
-    { "stop",          "compatibility alias: stop [1=filter, 2=sump, 3=wick]", cmd_pump_stop },
+    { "start",         "legacy role ID (not motor): [1=filter, 2=sump, 3=wick dose]", cmd_pump_start },
+    { "stop",          "legacy role ID (not motor): stop [1=filter, 2=sump, 3=wick]", cmd_pump_stop },
 };
 
 static const cli_cmd_t tec_cmds[] = {
+    { "permit", "show lock or explicitly confirm: tec permit chiller-at-temperature-and-circulating", cmd_tec_permit },
+    { "revoke", "revoke operator permission and stop every TEC", cmd_tec_revoke },
     { "set",      "tec set <1..4> <0..255> - set one DAC and verify VSENSE", cmd_tec_set },
     { "set-all",  "tec set-all <0..255> - set all DACs and read all VSENSE inputs", cmd_tec_set_all },
     { "read",     "tec read <1..4|all> - read output voltage through 130k/20k divider", cmd_tec_read },
@@ -3294,6 +3371,7 @@ static const cli_group_t groups[] = {
 };
 
 static const cli_cmd_t root_cmds[] = {
+    { "run",     "Open chamber single-key dashboard", cmd_run },
     { "help",    "Show help", cmd_help },
     { "version", "Show firmware version", cmd_version },
     { "safe",    "Disable hazardous outputs and place steppers in hard HiZ", cmd_safe },

@@ -5,3 +5,5 @@
 /zap.exe
 /zap
 *.patch
+.vscode/
+putty*.*

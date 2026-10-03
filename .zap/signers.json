@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "signers": [
+    {
+      "identity_hash": "sha256-zap-identity-v1",
+      "user_sha256": "f42f6a4bc7d9ebd6d89fa75a72d0cd9bffd71b09a51a12eca8e550d3fad9ee49",
+      "host_sha256": "58b65c71321fb50b5b58730238067e2f937b994a32231c69819fc3f5d19790c3",
+      "fingerprint": "SHA256:JSGDCpVGF3ud11Sl8Z0a6xtFHjuS3P9mUzFPLyV/+FI",
+      "public_key": "zap-hw-v1:MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsFCI/JaZVUaAvKVvAIuxHn8/RuExCSGK3sWV/Xu1UnNLGExZPwSm/TUWLPn7jxMqDXowuy4aKeo0JrRLApFxq2xJskYhtptXYMmMy2izIbZKGiHYbP7EInksh+KvwZxLQtnLHoMP79GDRrYQ42A0yoB2It3EOn7Ms5WHKXbYRQKrb5ONVEGB38omJi543+dlWltQo54ug0I4jimMwS443sBcVb4kwjVuOCenlbJ0wVA/FOK2rG3z8oIUDq4nplPUt6GQID674PXi1PF49QwSJQMtgmn/IqJeIj7amGggtoL669ZzCcvk6s16ZVu62lu3QTeaF5PLVWSH+0KEuOk1IQIDAQAB",
+      "created": "2026-09-19T23:21:56.3284333Z"
+    },
+    {
+      "label": "DaveZap",
+      "fingerprint": "SHA256:cPLvEAb4eg8tkA/EqmgyCDA6jiMqVhX7644urrPtrQE",
+      "public_key": "zap-hw-v1:MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsvern+zg5g2+tXaCr27xdqsZ8Qs3BmSLlwFNt2lnfRyFi30Rf3XZFDHv6lB2DgwCgfqr/uyZHgqgDSx8/qFuhov8DMTKcsPfdVTpYw8wiYljavEzp19HikvrzmxSwnthiBCa80aQk9S+BCgCiteII93KWJ1noCNuQZC3aOEP4yCkxVLtUwMx/SvlvQEWKaHrDDgOfEgyYRYz6AHIqFmSGpYLeiBr2hohCVcTNwSE+6qPhu9UZ9QUGGYyOrprQbWpknG2n3AeTVMyQyej53InRsCG23q7kwSr04InUMhBCwVuOlfLIpBOG50ibfl/U6ayKtgBliuMBwaY1Sb5moE8JwIDAQAB",
+      "user": "DESKTOP-0FE4VC8\\David",
+      "host": "DESKTOP-0FE4VC8",
+      "created": "2026-09-12T03:20:24.98975Z"
+    }
+  ]
+}
