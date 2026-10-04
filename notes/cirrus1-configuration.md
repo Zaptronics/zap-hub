@@ -30,23 +30,28 @@ There are
 
 Given the ZTM_ADC only has a total of 8 RTD channels we are not connecting all of the copper plate ones up in order to leave spares for temperature sensing in other parts of the system.
 
+There are two additional k-type thermocouples. TEC monitors PSU_TEC number 2 heat-sink temp, and CB on the return pipe of the Aluminum heat exchanger for the Process Chiller loop.
+
+CB can be used in place of the command interlock for the TEC modules.
+
 Here is the mapping.
 
 |ZTM_ADC |Sensor |
 |--------|-------|
-|  RT0   |       |
-|  RT1   |       |
-|  RT2   |       |
-|  RT3   |       |
+|  RT0   |  -    |
+|  RT1   |  -    |
+|  RT2   |  C    |
+|  RT3   |  B    |
 |  RT4   |  W2   |
 |  RT5   |  W1   |
 |  RT6   |  L1   |
 |  RT7   |  L2   |
-|  TC0   |       |
-|  TC1   |       |
-|  TC2   |       |
+|  TC0   |  CB   |
+|  TC1   |  TEC  |
+|  TC2   |  -    |
 
-The board is powered only by Zaplink.
+- = not connected.
+
 
 ## PSU_TEC
 
@@ -68,8 +73,8 @@ High Voltage ion sweeper 1K-5KV range, when user pressed h show the prompt HV [0
 
 |ZTM_PWM |Sensor |
 |--------|-------|
-|  L1    |       |
-|  L2    |       |
+|  L1    | BLED2 |
+|  L2    | BLED1 |
 |  L3    |       |
 |  L4    | PSU_TEC FANS
 |  L5    |       |
@@ -89,7 +94,7 @@ LED Left & Right. l key LED LEFT [0%]>   r key LED right [0%]>
 - PWM FAN 3 = Exhaust
 - PWM FAN 6 = Intake
 
-Intake and Exhaust fans should be run together at same RPM, this is to prevent creating a pressure differential. Low speed is 20% PWM, moderate 50%, and high is 90%
+Intake and Exhaust fans should be run together at same RPM, this is to prevent creating a pressure differential. Low speed is 30% PWM, moderate 50%, and high is 90%
 
 
 ## ZTM_6470 (AKA Stepper)
@@ -99,21 +104,21 @@ Only three of the four drivers are being used.
 ### IPO Filter loop. 
 
 Can only operate in one direction.
-stepper run 1 fwd 30
+stepper run 1 fwd 100
 
 ### IPO Wick.
 
 Run forward fast to prime the wick
-stepper run 2 fwd 100
+stepper run 3 fwd 100
 
 Forward slowly to continously wet.
-stepper run 2 fwd 30
+stepper run 3 fwd 30
 
 Reverse fast, perhaps as a shutdown step.
-stepper run 2 rev 100
+stepper run 3 rev 100
 
 
 ### IPO Return
-stepper run 3 fwd 30
+stepper run 2 fwd 100
 
 

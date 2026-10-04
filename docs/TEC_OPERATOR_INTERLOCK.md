@@ -44,3 +44,12 @@ fault. Its status must not be interpreted as a live flow measurement.
 Validation not run per project instructions: no builds, tests, hardware regression
 or rollback patch application. No Git operations. Reverse patch available in
 patches/Hub_0.6.0_tec-operator-interlock.patch.
+
+
+## Run console checks (Hub 0.6.12 onward)
+
+Run's `t` prompt and Runup keep this permission and add their own checks: TEC
+fans (L4) are turned on first, and a start needs valid CB and TEC2 readings
+with CB at or below CIRRUS1_CB_READY_C. While a TEC runs, Run's trips (see
+docs/RUN_CONSOLE.md) turn all TECs off and revoke this permission. From 0.6.14
+those checks keep running after Run is left. All limits are placeholders.

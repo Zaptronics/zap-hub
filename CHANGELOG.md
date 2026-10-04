@@ -1,5 +1,129 @@
 # Changelog
 
+## 0.6.18
+
+- Cirrus1 wiring from Dave's updated notes: IPO wick is stepper 3 and IPO return is stepper 2 (they were reversed); CIRRUS1_WICK_MOTOR 3, CIRRUS1_RETURN_MOTOR 2.
+- Filter and return normal speed raised from 30 to 100 steps/s (CIRRUS1_FILTER_SPEED, CIRRUS1_RETURN_SPEED). Wick speeds unchanged (wet 30, prime and drain 100).
+- `pump status` and pump command help text in cmds.h now name the new motor numbers and speeds (text only).
+- CIRRUS1_CONFIGURATION.md and RUN_CONSOLE.md updated to match.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.17
+
+- Documentation only: RUN_CONSOLE.md remaining-work section rewritten for the current state (placeholders, DAC direction, Tests/Go, loose-PWM-wire caveat) and a stale sensor-rate sentence fixed; CIRRUS1_CONFIGURATION.md wiring table brought up to date (TEC fans, lights, glass, fan presets, all fitted RTDs and thermocouples); TEC_OPERATOR_INTERLOCK.md notes Run's extra TEC checks.
+- No firmware behaviour change.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.16
+
+- Fan low preset raised from 20% to 30% and the closed-loop minimum drive from 10% to 20%: at 20% the fans audibly surged (the RPM loop hunting near the bottom of its range). The floor stays below the low preset so the shared RPM target can still lock.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.15
+
+- Fix (review of 0.6.14): Run's background work now holds the lwIP/cyw43 lock. Without it, main-loop TCP writes ([run] messages) and ADC/PWM bus traffic could interleave with commands running in the network context and corrupt either.
+- Fix: a safe typed at the normal prompt is now mirrored in Run (mode STOP, TEC/HV/fan state cleared, sequences cancelled). Before, a running Prime could re-apply Standby after safe and turn the filter, fans and LEDs back on.
+- cmd_safe counts its requests (cmd_safe_requests) so Run can tell an outside safe from its own STOP.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.14
+
+- Leaving Run no longer stops the TECs. With TECs, HV or a timed sequence running, ESC asks for a second ESC within 3 s before leaving; any other key cancels.
+- While Run is off screen, a new main-loop hook (cli_run_background, called from Hub.c) keeps reading sensors and fan tachs, applies the TEC trips and fan stall stop, and advances Prime and the Shutdown ramp. Any trip, stall or step is printed on the normal console as [run] <message>.
+- Losing the connection also leaves outputs running under the same background protection.
+- Re-entering Run keeps the mode, outputs, min..max ranges and the last notice (including a trip that happened while away).
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.13
+
+- Draft Run sequences on keys 2, 3, 4 and 6; a mode key must be pressed twice within 3 s. All values are placeholders (CIRRUS1_SEQ_* in cirrus1_config.h).
+- 2 Standby: TECs, HV, wick and return off; filter on; fans low; both LEDs 20%; glass 0%.
+- 3 Prime: filter and return on and a 5 s wick prime, then Standby after 60 s. Blocked while TECs are on.
+- 4 Runup (from Standby): wick wetting, filter and return on, TEC 30% through the normal TEC checks; the Sequence panel shows plate B against the -20 C ready mark. If the TECs do not start, the wick and return stop and the mode stays Standby.
+- 6 Shutdown: HV and glass off, wick drain, filter and return on, TECs ramp down 10% every 30 s to off (permission kept); lights and fans unchanged.
+- 1 Tests and 5 Go stay unavailable. Sequences advance only while Run is on screen.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.12
+
+- Run protection (placeholder limits in cirrus1_config.h, to be confirmed): a non-zero TEC turns the TEC fans (L4) on first and only starts with valid CB and TEC2 readings and CB at or below 25 C (chiller ready).
+- While any TEC is on from Run, a TEC trip turns all TECs off and revokes TEC permission when: TEC fans are off, TEC2 heat-sink is above 60 C, CB is above 35 C, any plate RTD is outside -50..45 C, or CB/TEC2 read faulty twice in a row. Fans and other outputs keep running. The reason stays on screen until the next TEC start.
+- Leaving Run (ESC) or losing the connection with a TEC on stops all four TECs (permission kept), because protection only runs while Run is on screen.
+- Fan stall: a settled intake or exhaust fan reading below 200 RPM on three 1 s reads in a row stops both fans.
+- New Run prompts: g glass heater (0-50%, capped because the glass has no sensor), c TEC fans (0/1; cannot go off while a TEC is on), p pumps (0 off, 1 filter, 2 return, 3 both), w wick (0 stop, 1 prime, 2 wet, 3 drain).
+- Outputs panel shows live VSENSE for TEC boards A-D (1 Hz), HV as estimated kV, and TEC fans ON/off. Status panel shows chiller READY/NOT READY, the trip limits and the last TEC trip. Pumps panel names the wick mode.
+- Footer now lists all keys on two lines; the terminal settings line moved to docs only.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.11
+
+- Add the yellow Zaptronics bolt (U+26A1) before CIRRUS1 in the Run title bar. It is treated as two columns wide so the bar still fits 120 columns.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.10
+
+- Requires local ZapEE 0.13.2.
+- Fix the low fan preset not locking: before closed loop, set both fans' minimum drive to 10% (EMC2303 default 40% held them above the 20% preset, so they ran past 2000 RPM).
+- Show free heap RAM in the Run title bar (yellow below 32 KB).
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.9
+
+- Remove the timed full redraw. Run clears and redraws the whole screen on entry and when F5 (ESC [ 1 5 ~) is pressed; otherwise only changed rows are sent.
+- F5 is documented in docs/RUN_CONSOLE.md only, not on screen; the footer no longer mentions redraws.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.8
+
+- Redesign Run as coloured, bordered panels (Sequence, Temperatures, Status, Outputs, Fans, Pumps, Modules and loads) with a title bar showing version, TEC permit and STOP state.
+- Screen size is now 120 columns by 40 rows; box lines use UTF-8, so the terminal must use UTF-8.
+- Temperatures are colour-banded (blue < -20, cyan < 5, green < 30, yellow < 45, red above) for reading at a glance; these are not limits.
+- Full redraw interval changed from 10 s to 60 s.
+- Row changes are tracked by hash instead of a full copy; each refresh sends at most 12000 bytes and finishes remaining rows on later ticks, staying under the 16 KiB network buffer.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.7
+
+- Replace the Run temperature lines with a panel: plate map (W2 / L1 B | C L2 / W1) laid out as in notes/cirrus1-configuration.md.
+- Show CB chiller return, TEC2 heat-sink and the ZTM_ADC board (CJC) temperatures.
+- Show plate spread (hottest minus coldest plate RTD) and min..max per sensor since Run was opened.
+- Compact the module initialization list to four per row to make room.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.6
+
+- Add Run fan presets from notes/cirrus1-configuration.md: f then 0 off, 1 low 20%, 2 moderate 50%, 3 high 90%.
+- Presets start intake (fan 6) and exhaust (fan 3) open loop, then after five seconds lock both to the slower fan's RPM (closed loop).
+- If tach reads or targets fail, both fans stay at the same open-loop duty; a failed preset write stops both.
+- Show both fan RPMs, the preset, phase and shared RPM target on the dashboard; STOP resets the preset.
+- Map RT2 = C and RT3 = B RTDs, and K-type TC0 = CB (chiller return pipe) and TC1 = PSU_TEC 2 heat-sink.
+- Run reads one temperature sensor every 0.5 s (eight sensors).
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.5
+
+- Run keys: only Space and 7 request STOP; other unassigned keys, Enter and arrow/function keys are ignored.
+- Add Run manual prompts from notes/cirrus1-configuration.md: t (TEC, all four), h (HV), l and r (LEDs), entered as 0-100%.
+- TEC % maps linearly to DAC 0-255 on all four channels; requires operator permission; 0% stops channels and keeps permission.
+- HV 1-100% spans the calibrated nominal range; 0% turns the converter off.
+- ESC inside a prompt cancels it; Space still requests STOP while a prompt is open.
+- Show W1, W2, L1 and L2 RTD temperatures, reading one sensor per second.
+- Validation not run: no builds, tests or rollback application.
+
+
 ## 0.6.4
 
 - Remove the temporary Run input diagnostic line and its unused tracking state.

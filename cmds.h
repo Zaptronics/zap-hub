@@ -691,9 +691,9 @@ static int cmd_pump_status(int argc, char **argv, char *out, size_t out_len)
     console_printf("\r\nPumping subsystem: %s\r\n", pumping_ready() ? "READY" : "NOT READY");
     console_printf("  IPA filter  motor 1: %-7s fwd %u steps/s\r\n",
                    pump_state_name(status.filter_state), (unsigned)status.filter_speed);
-    console_printf("  IPA sump    motor 3: %-7s fwd %u steps/s\r\n",
+    console_printf("  IPA sump    motor 2: %-7s fwd %u steps/s\r\n",
                    pump_state_name(status.sump_state), (unsigned)status.sump_speed);
-    console_printf("  IPA wick    motor 2: %-7s %s %u steps/s, %u ms remaining\r\n",
+    console_printf("  IPA wick    motor 3: %-7s %s %u steps/s, %u ms remaining\r\n",
                    pump_state_name(status.wick_state),
                    pump_wick_direction_name(status.wick_state),
                    (unsigned)status.wick_speed,
@@ -708,7 +708,7 @@ static int cmd_pump_filter_normal(int argc, char **argv, char *out, size_t out_l
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_filter_start_normal(),
-                               "IPA filter normal: motor 1 fwd 30 steps/s");
+                               "IPA filter normal: motor 1 fwd 100 steps/s");
 }
 
 static int cmd_pump_filter_fast(int argc, char **argv, char *out, size_t out_len)
@@ -728,28 +728,28 @@ static int cmd_pump_wick_prime(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_prime(),
-                               "IPA wick prime: motor 2 fwd 100 steps/s for 5000 ms");
+                               "IPA wick prime: motor 3 fwd 100 steps/s for 5000 ms");
 }
 
 static int cmd_pump_wick_dose(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_dose(),
-                               "IPA wick dose: motor 2 fwd 30 steps/s for 2000 ms");
+                               "IPA wick dose: motor 3 fwd 30 steps/s for 2000 ms");
 }
 
 static int cmd_pump_wick_drain(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_drain(),
-                               "IPA wick drain: motor 2 rev 100 steps/s for 5000 ms");
+                               "IPA wick drain: motor 3 rev 100 steps/s for 5000 ms");
 }
 
 static int cmd_pump_wick_wet(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_wick_wet(),
-                               "IPA wick wet: motor 2 fwd 30 steps/s continuously; wick-stop to end");
+                               "IPA wick wet: motor 3 fwd 30 steps/s continuously; wick-stop to end");
 }
 
 static int cmd_pump_wick_stop(int argc, char **argv, char *out, size_t out_len)
@@ -762,7 +762,7 @@ static int cmd_pump_sump_run(int argc, char **argv, char *out, size_t out_len)
 {
     (void)argc; (void)argv; (void)out; (void)out_len;
     return pump_command_result(pumping_sump_run(),
-                               "IPA sump running: motor 3 fwd 30 steps/s");
+                               "IPA sump running: motor 2 fwd 100 steps/s");
 }
 
 static int cmd_pump_sump_stop(int argc, char **argv, char *out, size_t out_len)
@@ -3199,8 +3199,12 @@ static int cmd_adc_iout_off(int argc, char **argv, char *out, size_t out_len)
    Global safe-state command
    ========================================================= */
 
+/* Counted so Run can tell a safe typed at the normal prompt from its own STOP. */
+static unsigned cmd_safe_requests;
+
 static int cmd_safe(int argc, char **argv, char *out, size_t out_len)
 {
+    ++cmd_safe_requests;
     (void)argc;
     (void)argv;
     (void)out;
@@ -3299,16 +3303,16 @@ static const cli_cmd_t stepper_cmds[] = {
 
 static const cli_cmd_t pump_cmds[] = {
     { "status",        "show pump mapping, state, speed, and wick timer", cmd_pump_status },
-    { "filter-normal", "IPA filter: motor 1 fwd 30 steps/s", cmd_pump_filter_normal },
+    { "filter-normal", "IPA filter: motor 1 fwd 100 steps/s", cmd_pump_filter_normal },
     { "filter-fast",   "IPA filter: motor 1 fwd 100 steps/s", cmd_pump_filter_fast },
     { "filter-stop",   "stop IPA filter motor 1", cmd_pump_filter_stop },
-    { "wick-prime",    "IPA wick: motor 2 fwd 100 steps/s for 5000 ms", cmd_pump_wick_prime },
-    { "wick-dose",     "IPA wick: motor 2 fwd 30 steps/s for 2000 ms", cmd_pump_wick_dose },
-    { "wick-drain",    "IPA wick: motor 2 rev 100 steps/s for 5000 ms", cmd_pump_wick_drain },
-    { "wick-wet",      "IPA wick: motor 2 fwd 30 steps/s continuously until stopped", cmd_pump_wick_wet },
-    { "wick-stop",     "stop IPA wick motor 2", cmd_pump_wick_stop },
-    { "sump-run",      "IPA sump: motor 3 fwd 30 steps/s", cmd_pump_sump_run },
-    { "sump-stop",     "stop IPA sump motor 3", cmd_pump_sump_stop },
+    { "wick-prime",    "IPA wick: motor 3 fwd 100 steps/s for 5000 ms", cmd_pump_wick_prime },
+    { "wick-dose",     "IPA wick: motor 3 fwd 30 steps/s for 2000 ms", cmd_pump_wick_dose },
+    { "wick-drain",    "IPA wick: motor 3 rev 100 steps/s for 5000 ms", cmd_pump_wick_drain },
+    { "wick-wet",      "IPA wick: motor 3 fwd 30 steps/s continuously until stopped", cmd_pump_wick_wet },
+    { "wick-stop",     "stop IPA wick motor 3", cmd_pump_wick_stop },
+    { "sump-run",      "IPA sump: motor 2 fwd 100 steps/s", cmd_pump_sump_run },
+    { "sump-stop",     "stop IPA sump motor 2", cmd_pump_sump_stop },
     { "stop-all",      "stop motors 1..3 and keep motor 4 in HiZ", cmd_pump_stop_all },
     { "start",         "legacy role ID (not motor): [1=filter, 2=sump, 3=wick dose]", cmd_pump_start },
     { "stop",          "legacy role ID (not motor): stop [1=filter, 2=sump, 3=wick]", cmd_pump_stop },

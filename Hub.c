@@ -76,6 +76,9 @@ int main(void)
         /* Pump process deadlines need finer resolution than the 1-second sensor tick. */
         if (g_pumping_ready) (void)pumping_update();
 
+        /* TECs, fans and sequences started in Run stay protected after leaving it. */
+        cli_run_background();
+
         log_poll();
         tight_loop_contents();
     }
