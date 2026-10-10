@@ -3,8 +3,10 @@
 /.cache/
 /deps/
 /zap.exe
-/zap/
+zap/
 *.patch
 .vscode/
 putty*.*
 zap.exe
+wifi.local.cmake
+env.ps1

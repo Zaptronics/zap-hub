@@ -1,0 +1,4 @@
+# Local Wi-Fi credentials for the Hub build.
+# Copy this file to wifi.local.cmake (git-ignored) and fill in your network.
+set(HUB_WIFI_SSID "MyNetwork")
+set(HUB_WIFI_PASSWORD "secret")

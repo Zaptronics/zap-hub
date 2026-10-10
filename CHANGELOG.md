@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.33
+
+- TEMPORARY CB bypass (Dave): the CB thermocouple touches the aluminium block and jumps by several C. Run key K now grants the TEC permit whatever CB reads and sets a CB bypass until reboot: no CB interlock (auto permit, CB above 4 C, CB fault/open circuit), no CB > 35 C trip or CB fault guard, and no chiller-ready check on TEC start. TEC2 heat-sink, TEC fans and plate protection still trip. Title bar shows a flashing red CB BYPASS. K with the permit already granted also sets the bypass.
+- Roll back with `patches/Hub_0.6.33_k-cb-bypass.patch` (reverse) once CB is remounted.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.32
+
+- WiFi credentials now come from an optional, git-ignored `wifi.local.cmake` next to CMakeLists.txt (template: `wifi.local.cmake.example`). The `ZAP_HUB_WIFI_SSID` / `ZAP_HUB_WIFI_PASSWORD` environment variables remain a fallback.
+- Removed `env.ps1` (held real credentials) and `env-template.ps1`; `env.ps1` and `wifi.local.cmake` added to .gitignore. `ZAPEE_SOURCE` is no longer used: zap.yml resolves ZapEE from `../ZapEE`.
+- Validation not run: no builds, tests or rollback application.
+
+
 ## 0.6.31
 
 - CB interlock threshold moved from 0 C to 4 C (Dave): CB below 4 C unlocks the TECs (auto permit); above 4 C, open circuit or faulty re-locks and stops all four TECs. K and the chiller-ready start check accept CB at or below 4 C, and CB turns green at or below 4 C. Only cirrus1_config.h values changed (CIRRUS1_CB_UNLOCK_C, CIRRUS1_CB_LOCK_C, CIRRUS1_CB_READY_C), plus docs.

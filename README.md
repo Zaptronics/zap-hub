@@ -1,6 +1,6 @@
 # Cloud chamber Hub
 
-Hub 0.6.31 requires local ZapEE 0.13.2 for normal-console server echo and
+Hub 0.6.32 requires local ZapEE 0.13.2 for normal-console server echo and
 backspace editing. Keep PuTTY Local echo and Local line editing both Force off;
 the same settings now support the command prompt and Run dashboard.
 
@@ -154,8 +154,10 @@ zap sync --no-configure
 Then use your normal build/test workflow. This change has not been built or tested
 by the assistant. Hardware regression is skipped. No Git operations were performed.
 
-Keep WiFi credentials in local build settings (`ZAP_HUB_WIFI_SSID` and
-`ZAP_HUB_WIFI_PASSWORD`). Application credentials, web assets, module inventory,
+Keep WiFi credentials out of source: copy `wifi.local.cmake.example` to
+`wifi.local.cmake` (git-ignored) and set `HUB_WIFI_SSID` and
+`HUB_WIFI_PASSWORD` there. The `ZAP_HUB_WIFI_SSID` and `ZAP_HUB_WIFI_PASSWORD`
+environment variables still work as a fallback. Application credentials, web assets, module inventory,
 event messages and chamber policy stay in Hub. `ztmb` contains application bindings and services configured by Hub. Board and
 driver headers are included directly from ZapEE; forwarding headers were removed.
 

@@ -94,6 +94,7 @@ static uint32_t run_sensor_at;
 static uint32_t run_cb_at;  /* last CB read, for the CB interlock */
 static uint32_t run_tec2_at; /* last TEC2 read, for TEC fan auto-on */
 static bool run_cb_cold;    /* CB has been below the unlock limit */
+static bool run_cb_bypass;  /* K pressed: CB interlock and CB guards off until reboot */
 static uint8_t run_tec_pending;     /* TEC % waiting for K while locked */
 static uint32_t run_tec_pending_at;
 
@@ -653,6 +654,7 @@ static bool run_tec_check(bool starting, char *why, size_t size)
     for (unsigned g = 0; g < sizeof(guards) / sizeof(guards[0]); ++g) {
         unsigned i = guards[g].sensor;
         const run_reading_t *r = &run_readings[i];
+        if (run_cb_bypass && i == RUN_S_CB) continue;
         if (!run_reading_ok(i) && (starting || r->faults >= CIRRUS1_SENSOR_FAULT_READS)) {
             (void)snprintf(why, size, "%s sensor %s", guards[g].name, r->seen ? "fault" : "not read yet");
             return false;
@@ -663,7 +665,7 @@ static bool run_tec_check(bool starting, char *why, size_t size)
             return false;
         }
     }
-    if (starting && run_readings[RUN_S_CB].celsius > CIRRUS1_CB_READY_C) {
+    if (starting && !run_cb_bypass && run_readings[RUN_S_CB].celsius > CIRRUS1_CB_READY_C) {
         (void)snprintf(why, size, "chiller not ready: CB %.1f" RUN_DEG "C above %.0f",
                        run_readings[RUN_S_CB].celsius, CIRRUS1_CB_READY_C);
         return false;
@@ -718,7 +720,7 @@ static void run_protect(void)
 static void run_cb_interlock(void)
 {
     const run_reading_t *r = &run_readings[RUN_S_CB];
-    if (!cooling_ready() || !r->seen) return;
+    if (run_cb_bypass || !cooling_ready() || !r->seen) return;
     bool ok = run_reading_ok(RUN_S_CB);
     bool fault = !ok && (r->status == ZTM_ADC_SENSOR_DISCONNECTED ||
                          r->faults >= CIRRUS1_SENSOR_FAULT_READS);
@@ -764,11 +766,12 @@ static void run_frame_title(void)
 {
     bool stopped = run_active == 7u;
     unsigned free_kb = run_free_ram_kb();
-    char right[192];
+    char right[256];
     (void)snprintf(right, sizeof(right),
-                   "RAM free %s%u KB" RUN_WHITE "  Hub %s  %s%s" RUN_ON_BLUE "  %s%s " RUN_RESET,
+                   "RAM free %s%u KB" RUN_WHITE "  Hub %s  %s%s%s" RUN_ON_BLUE "  %s%s " RUN_RESET,
                    free_kb < 32u ? RUN_YELLOW : "", free_kb,
                    HUB_FIRMWARE_VERSION,
+                   run_cb_bypass ? RUN_ON_RED RUN_BLINK " CB BYPASS " "\033[25m" RUN_ON_BLUE " " : "",
                    cooling_tec_permission_granted() ? RUN_ON_GREEN " TEC PERMIT " : RUN_ON_RED " TEC LOCKED ",
                    RUN_ON_BLUE,
                    stopped ? RUN_ON_RED " STOPPED " : RUN_ON_BLUE " READY ",
@@ -1621,9 +1624,12 @@ static void run_song_slice(void)
 }
 
 /* K: Run's equivalent of `tec permit chiller-at-temperature-and-circulating`.
- * Grants the permit only with a valid CB reading at or below
- * CIRRUS1_CB_LOCK_C, then starts the TEC %
- * a locked `t` left pending within CIRRUS1_TEC_CONFIRM_MS. */
+ * TEMPORARY (0.6.33, Dave): the CB thermocouple touches the aluminium block
+ * and reads noisy, so K grants the permit whatever CB reads and turns on
+ * run_cb_bypass until reboot: no CB interlock, no CB trip or fault guard, no
+ * chiller-ready start check. Dave watches CB externally. TEC2, TEC fans and
+ * plate protection stay active. Then starts the TEC % a locked `t` left
+ * pending within CIRRUS1_TEC_CONFIRM_MS. */
 static void run_permit_key(void)
 {
     uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -1631,29 +1637,16 @@ static void run_permit_key(void)
                        (uint32_t)(now - run_tec_pending_at) <= CIRRUS1_TEC_CONFIRM_MS
                            ? run_tec_pending : 0u;
     run_tec_pending = 0;
+    run_cb_bypass = true;
     if (!cooling_tec_permission_granted()) {
-        const run_reading_t *r = &run_readings[RUN_S_CB];
-        if (!run_reading_ok(RUN_S_CB)) {
-            run_notice = "Permit refused: no valid CB reading.";
-            return;
-        }
-        /* K never bypasses the CB rule: CB must be at or below the lock limit
-         * (4 C since 0.6.31; exactly 4.0 C is accepted). */
-        if (!(r->celsius <= CIRRUS1_CB_LOCK_C)) {
-            (void)snprintf(run_result, sizeof(run_result),
-                           "Permit refused: CB %.1f" RUN_DEG "C is above %.0f.", r->celsius,
-                           CIRRUS1_CB_LOCK_C);
-            run_notice = run_result;
-            return;
-        }
         if (!cooling_tec_confirm_chiller()) {
-            run_notice = "Permit FAILED; all TECs off.";
+            run_notice = "Permit FAILED; all TECs off. CB bypassed until reboot.";
             return;
         }
         run_cb_cold = true;
-        run_notice = "TEC permit granted (K).";
+        run_notice = "TEC permit granted (K). CB BYPASSED until reboot: watch CB yourself.";
     } else {
-        run_notice = "TEC permit already granted.";
+        run_notice = "TEC permit already granted. CB BYPASSED until reboot: watch CB yourself.";
     }
     if (pending) run_apply_tec(pending);
 }

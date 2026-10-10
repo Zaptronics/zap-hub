@@ -78,7 +78,7 @@ include(pico_sdk_import.cmake)
 
 project(Hub C CXX ASM)
 
-set(HUB_FIRMWARE_VERSION "0.6.31")
+set(HUB_FIRMWARE_VERSION "0.6.33")
 set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
 configure_file(
@@ -90,6 +90,10 @@ configure_file(
 # Network credentials are local build settings, not source-code defaults.
 set(HUB_WIFI_SSID "" CACHE STRING "Wi-Fi SSID used by the Hub reference application")
 set(HUB_WIFI_PASSWORD "" CACHE STRING "Wi-Fi password used by the Hub reference application")
+
+# Optional, git-ignored local credentials. Copy wifi.local.cmake.example to
+# wifi.local.cmake and fill it in. Values set there take precedence.
+include(${CMAKE_CURRENT_LIST_DIR}/wifi.local.cmake OPTIONAL)
 
 # Allow IDE/direct-CMake builds to use the same local environment variables
 # as Zap. Explicit -D cache values still take precedence.

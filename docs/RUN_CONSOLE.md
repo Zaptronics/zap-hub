@@ -93,6 +93,15 @@ with CB above 4 C (exactly 4.0 C is accepted). K on its own,
 with nothing pending, just grants the permit. Any
 STOP (Space, 7 or `safe`) clears a pending TEC value.
 
+**Temporary CB bypass (0.6.33).** The CB thermocouple touches the aluminium
+block and reads noisy (jumps of several C), so K now ignores CB: it grants the
+permit whatever CB reads and switches the CB rule off until the Pico reboots.
+While bypassed there is no CB interlock (no auto permit, no CB trip, no CB
+fault trip), no CB > 35 C trip and no chiller-ready check when starting the
+TECs. The title bar shows a flashing red CB BYPASS. TEC2 heat-sink, TEC fans
+and plate protection still trip the TECs. Watch CB yourself. Revert with
+patches/Hub_0.6.33_k-cb-bypass.patch once CB is remounted.
+
 CB is read every 2 s from boot, whether or not Run is open; outside Run, grants
 and trips print as a `[run]` line on the console. Exactly 4.0 C changes
 nothing. The limits are CIRRUS1_CB_UNLOCK_C, CIRRUS1_CB_LOCK_C and
