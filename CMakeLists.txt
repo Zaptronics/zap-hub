@@ -78,7 +78,7 @@ include(pico_sdk_import.cmake)
 
 project(Hub C CXX ASM)
 
-set(HUB_FIRMWARE_VERSION "0.6.18")
+set(HUB_FIRMWARE_VERSION "0.6.31")
 set(HUB_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${HUB_GENERATED_DIR})
 configure_file(

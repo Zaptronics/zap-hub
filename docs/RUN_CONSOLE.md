@@ -1,4 +1,4 @@
-# Run console, Hub 0.6.18
+# Run console, Hub 0.6.31
 
 Requires local ZapEE 0.13.2. Enter `run` in the TCP terminal on port 2323.
 Use an ANSI terminal of at least 120 columns by 40 rows with UTF-8 character
@@ -43,6 +43,61 @@ The dashboard shows the TEC and HV values set from Run (reset by STOP). Since
 0.6.6 it reads one sensor every 0.5 s (see Temperature panel), so a
 conversion never delays STOP for long.
 
+## Load currents (0.6.19)
+
+The Outputs panel shows the measured current next to LED L (L9), LED R (L10),
+Glass (L12) and TEC fan (L4), read the same way as `pwm current` (PAC195x,
+averaged, 50 mOhm shunts). Run reads one load every 250 ms, so each value
+refreshes about once a second while Run is on screen. Values under 1 A show in
+mA, larger ones in A; `--` means the read failed. Currents are display only:
+nothing trips on them yet. The BLED channels are not shown.
+
+## Colours, alerts and TEC fan auto-on (0.6.30)
+
+- Temperatures: green up to 40 C, orange 40-60 C, flashing red above 60 C
+  (CIRRUS1_TEMP_ORANGE_C, CIRRUS1_TEMP_RED_C). CB is the exception: orange until
+  it reaches the safe TEC run zone (4 C or below), then green.
+- Flashing red also marks sensor faults (O/C, ERR, noCJC, range), a fan below
+  the stall speed and the fan that tripped the stall stop (STALL, cleared by
+  the next `f` preset), and glass current under 10 mA while the glass is at
+  20% or more (CIRRUS1_GLASS_OC_MA, CIRRUS1_GLASS_OC_MIN_PCT): likely an open
+  heater. Lower glass duties often read 0 mA and are not flagged.
+- TEC2 heat-sink above 40 C (CIRRUS1_TEC2_FANS_ON_C) turns the TEC fans (L4)
+  on automatically, Run open or not, including after a STOP. It never turns
+  them off. TEC2 is read at least every 4 s for this.
+- Flashing needs blinking enabled in the terminal (PuTTY: Window > Appearance
+  or Terminal settings, "Enable blinking text"); otherwise it shows steady red.
+
+## CB interlock (0.6.21)
+
+The TEC lock follows the CB thermocouple (Process Chiller return pipe):
+
+- CB below 4 C grants the TEC permit automatically (title bar TEC PERMIT), as
+  if `tec permit` had been typed. This happens once each time CB goes cold, so
+  after a STOP, `safe` or `tec revoke` while CB is still cold the TECs stay
+  locked until `tec permit` is typed or CB warms above 4 and cools again.
+- CB above 4 C, CB open circuit, or another CB fault on two reads in a row
+  revokes the permit and stops all four TEC modules, however they were
+  started (Run, `tec` commands or a sequence). Fans, pumps and the other
+  outputs keep running. The reason shows as a TEC TRIP.
+- A `tec permit` typed while CB is above 4 C is revoked at the next CB read.
+
+### K: permit from inside Run (0.6.22)
+
+When the TECs are locked, `t` with a non-zero value no longer just refuses.
+It asks for confirmation: press K within 10 s (CIRRUS1_TEC_CONFIRM_MS) to
+confirm the chiller is at temperature and circulating. That grants the permit,
+as `tec permit chiller-at-temperature-and-circulating` would, and starts the
+TEC at the value just entered. K is refused without a valid CB reading or
+with CB above 4 C (exactly 4.0 C is accepted). K on its own,
+with nothing pending, just grants the permit. Any
+STOP (Space, 7 or `safe`) clears a pending TEC value.
+
+CB is read every 2 s from boot, whether or not Run is open; outside Run, grants
+and trips print as a `[run]` line on the console. Exactly 4.0 C changes
+nothing. The limits are CIRRUS1_CB_UNLOCK_C, CIRRUS1_CB_LOCK_C and
+CIRRUS1_CB_PERIOD_MS in cirrus1_config.h.
+
 ## Leaving and returning (0.6.14)
 
 Leaving Run does not change outputs. If TECs, HV or a timed sequence (Prime,
@@ -86,11 +141,11 @@ re-entering Run shows the active mode.
 ## Protection and more prompts (0.6.12)
 
 All limits are PLACEHOLDERS in cirrus1_config.h (CIRRUS1_TRIP_*,
-CIRRUS1_CB_READY_C, CIRRUS1_FAN_STALL_*, CIRRUS1_GLASS_MAX_PCT) until confirmed.
+CIRRUS1_CB_READY_C, CIRRUS1_FAN_STALL_*) until confirmed.
 
 TEC start (`t` with a non-zero value) still needs `tec permit`. Run now also
 turns the TEC fans (L4) on first, then requires a valid CB reading at or below
-25 C (chiller ready) and a valid TEC2 reading below its trip. If a check fails
+4 C (chiller ready; 0 C in 0.6.21-0.6.30, 25 C before) and a valid TEC2 reading below its trip. If a check fails
 the TECs are not started and the reason is shown; the TEC fans stay on.
 
 While any TEC is on from Run, a TEC trip turns all four TECs off and revokes
@@ -112,8 +167,9 @@ is no pressure differential. An invalid tach is treated as unknown, not stalled.
 
 New prompts:
 
-- `g` GLASS [n%]> : ITO glass heater, load L12, 0-50%. Capped because the
-  glass has no temperature sensor.
+- `g` GLASS [n%]> : ITO glass heater, load L12, 0-100% (the 50% cap was
+  removed in 0.6.20). The glass has no temperature sensor; watch its current
+  in the Outputs panel.
 - `c` TEC FANS 0-1 [n]> : load L4 at 100% or off. It refuses off while a TEC
   is on.
 - `p` PUMPS 0-3 [n]> : 0 filter and return off, 1 filter only, 2 return only,
@@ -131,9 +187,8 @@ Run draws bordered, coloured panels: a title bar (yellow Zaptronics bolt
 before CIRRUS1, drawn two columns wide; free heap RAM, version, TEC
 permit, STOP state), Sequence, Temperatures, Status (notices and the open prompt), Outputs,
 Fans, Pumps, and Modules and loads, with a key bar at the bottom. Zero values
-are dim and active values bright. Temperatures are colour-banded for reading at
-a glance (blue below -20, cyan below 5, green below 30, yellow below 45, red
-above); the bands are not limits. Each refresh sends at most 12000 bytes;
+are dim and active values bright. Temperatures are colour-banded (0.6.30; see
+"Colours, alerts and TEC fan auto-on" below). Each refresh sends at most 12000 bytes;
 remaining changed rows follow on the next ticks, keeping output below the
 16 KiB network buffer.
 
@@ -164,10 +219,10 @@ the edge with the AC inlet on the far side (A and D have no RTD fitted):
 Below it: CB (Process Chiller return pipe, TC0), TEC2 (PSU_TEC 2 heat-sink,
 TC1) and the ZTM_ADC board cold-junction temperature; the plate spread
 (hottest minus coldest plate RTD); and min..max for every sensor since Run was
-opened, to help choose operating thresholds. Faults show as ERR, open, noCJC
-or range; -- means not read yet. Run reads one sensor every 0.5 s, so each
-value refreshes about every 4.5 s. CB is display only; it does not replace the
-TEC operator interlock.
+opened, to help choose operating thresholds. Faults show as ERR, O/C (open
+circuit), noCJC or range in flashing red; -- means not read yet. Run reads one sensor every 0.5 s. Since
+0.6.21 CB is read every 2 s for the CB interlock (below), and the other
+sensors share the remaining slots, refreshing about every 5 s.
 
 ## Keys appear locally or do not respond
 
@@ -195,13 +250,13 @@ the 0.6.16 fan presets (low 30%, 20% floor) hold a stable shared RPM.
 
 Still open:
 - Every protection limit and sequence value in cirrus1_config.h
-  (CIRRUS1_TRIP_*, CIRRUS1_CB_READY_C, CIRRUS1_FAN_STALL_*, CIRRUS1_GLASS_MAX_PCT,
+  (CIRRUS1_TRIP_*, CIRRUS1_CB_READY_C, CIRRUS1_FAN_STALL_*,
   CIRRUS1_SEQ_*) is a placeholder awaiting confirmed values.
 - TEC DAC direction (does a higher % cool harder?) is not yet confirmed; Runup
   and the Shutdown ramp assume it does.
 - 1 Tests needs a ZapLink check interface and pass criteria; 5 Go needs
   running targets (TEC, glass, HV, lights) and a Runup completion rule.
-- TEC balancing to board B's VSENSE, load currents, temperature logging and a
+- TEC balancing to board B's VSENSE, temperature logging and a
   chamber temperature regulator are not implemented.
 - The stall check only catches slow fans. A fan whose PWM wire is loose runs at
   full speed and is not flagged.

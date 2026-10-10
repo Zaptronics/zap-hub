@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.6.31
+
+- CB interlock threshold moved from 0 C to 4 C (Dave): CB below 4 C unlocks the TECs (auto permit); above 4 C, open circuit or faulty re-locks and stops all four TECs. K and the chiller-ready start check accept CB at or below 4 C, and CB turns green at or below 4 C. Only cirrus1_config.h values changed (CIRRUS1_CB_UNLOCK_C, CIRRUS1_CB_LOCK_C, CIRRUS1_CB_READY_C), plus docs.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.30
+
+- TEC2 heat-sink above 40 C (CIRRUS1_TEC2_FANS_ON_C) turns the TEC fans (L4) on automatically, Run open or not; TEC2 is read at least every 4 s (CIRRUS1_TEC2_PERIOD_MS) alongside the 2 s CB read. Never turns them off.
+- Temperature colours: green to 40 C, orange (256-colour) 40-60 C, flashing red above 60 C; CB orange until at or below 0 C, then green.
+- Flashing red (ESC[5m) for sensor faults (open circuit now shown as O/C), a slow fan, a fan that tripped the stall stop (STALL until the next preset), and glass current under 10 mA at 20% duty or more.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.29
+
+- Easter-egg tune: x plays it one octave higher than z (A4-F#5, 440-740 Hz), same rules. Loudness unchanged: CIRRUS1_SONG_LEVEL_PCT is already 100, a full on/off square wave.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.28
+
+- Easter-egg tune stutter: while it plays (about 9 s), Run's screen tick skips its sensor, fan, VSENSE and current reads, protection checks and redraw; the main-loop CB read and Hub.c's 1 s module/sensing/cooling/sweeping polls pause too (new cli_run_song_playing()). All resume when the tune ends. STOP, safe and keys still work during it.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.27
+
+- Easter-egg tune: plays once through with no fade, z while playing does nothing (STOP, safe or a mode change still end it), and the melody is raised one octave (A3-F#4, 220-370 Hz).
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.26
+
+- Easter-egg tune replaced with Dave's vocal melody from notes/particle_man_vocal_melody.mid (190 bpm, 29 notes, about 8.7 s), converted note for note into run_song[] in run_console.h.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.25
+
+- Easter egg (deliberately left out of the Run docs and footer): in Standby or Shutdown, z plays the Particle Man chorus hook on the ITO glass heater (L12) as a square wave, gating it on and off over I2C at each note's pitch, since the SX1509 PWM frequency only changes in shared octave steps. z again fades it out over 2 s; STOP, safe or a mode change stops it. L12's previous duty is restored afterwards. Melody transcribed from memory; it lives in run_song[] in run_console.h. New CIRRUS1_SONG_LEVEL_PCT (100).
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.24
+
+- Reverts the 0.6.23 tightening at Dave's request: Run key K again accepts CB at or below CIRRUS1_CB_LOCK_C (exactly 0.0 C is fine). K still refuses without a valid CB reading or with CB above 0 C.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.23
+
+- Run key K now requires CB strictly below CIRRUS1_CB_UNLOCK_C (0 C), the same rule as the CB interlock's unlock; 0.6.22 also accepted exactly 0.0 C.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.22
+
+- Run key K grants the TEC permit without leaving Run (equivalent of `tec permit chiller-at-temperature-and-circulating`), only with a valid CB reading at or below CIRRUS1_CB_LOCK_C (0 C).
+- A locked `t` with a non-zero value now waits up to CIRRUS1_TEC_CONFIRM_MS (10 s) for K, then grants the permit and starts the TEC at that value. STOP and safe clear the pending value.
+- Footer shows k TEC permit; RUN_CONSOLE.md and TEC_OPERATOR_INTERLOCK.md updated.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.21
+
+- CB interlock (Dave's request): CB below 0 C grants the TEC permit automatically (once per cold spell); CB above 0 C, open circuit, or a CB fault on two reads in a row revokes it and stops all four TECs through the existing TEC trip. Runs from boot via cli_run_background, whether or not Run is open; outside Run, changes print as a [run] line.
+- CB is read every 2 s (CIRRUS1_CB_PERIOD_MS); the other sensors rotate through the remaining Run slots. New CIRRUS1_CB_UNLOCK_C / CIRRUS1_CB_LOCK_C (0.0). CIRRUS1_CB_READY_C changed from 25 to 0 to match; the Status panel shows CB > 0 as the CB trip.
+- RUN_CONSOLE.md gains a CB interlock section; TEC_OPERATOR_INTERLOCK.md notes the automatic grant and revoke.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.20
+
+- Glass heater 50% cap removed at Dave's request: CIRRUS1_GLASS_MAX_PCT is now 100, so the Run `g` prompt accepts 0-100%. The glass still has no temperature sensor; its current shows in the Outputs panel (0.6.19).
+- RUN_CONSOLE.md and CIRRUS1_CONFIGURATION.md updated.
+- Validation not run: no builds, tests or rollback application.
+
+
+## 0.6.19
+
+- Run Outputs panel shows the measured current of LED L (L9), LED R (L10), Glass (L12) and TEC fans (L4) beside each value, sampled through ztm_pwm_read_current_uA (averaged, as `pwm current`), one load every 250 ms. Display only; no current limits. BLED channels not shown.
+- docs/RUN_CONSOLE.md gains a Load currents section.
+- Validation not run: no builds, tests or rollback application.
+
+
 ## 0.6.18
 
 - Cirrus1 wiring from Dave's updated notes: IPO wick is stepper 3 and IPO return is stepper 2 (they were reversed); CIRRUS1_WICK_MOTOR 3, CIRRUS1_RETURN_MOTOR 2.

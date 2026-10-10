@@ -66,7 +66,9 @@ int main(void)
     cli_init();
 
     while (true) {
-        if (atomic_exchange(&g_tick_1s, false)) {
+        /* The 1 s polls pause while Run's z tune plays (about 9 s) so their
+         * bus reads do not make it stutter. */
+        if (!cli_run_song_playing() && atomic_exchange(&g_tick_1s, false)) {
             (void)modules_poll_all();
             if (g_sensing_ready) (void)sensing_update();
             if (g_cooling_ready) (void)cooling_update();

@@ -53,3 +53,13 @@ fans (L4) are turned on first, and a start needs valid CB and TEC2 readings
 with CB at or below CIRRUS1_CB_READY_C. While a TEC runs, Run's trips (see
 docs/RUN_CONSOLE.md) turn all TECs off and revoke this permission. From 0.6.14
 those checks keep running after Run is left. All limits are placeholders.
+
+## CB interlock (Hub 0.6.21 onward)
+
+The typed phrase is no longer the only way to grant permission. CB (the
+Process Chiller return thermocouple) below 4 C grants it automatically, once
+per cold spell. CB above 4 C, open circuit or faulty revokes it and stops all
+four TEC modules, including a permission granted by typing. This runs from
+boot, whether or not Run is open. See "CB interlock" in docs/RUN_CONSOLE.md.
+From Hub 0.6.22 the Run key K grants the same permission from inside Run,
+only with a valid CB reading at or below 4 C.

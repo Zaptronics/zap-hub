@@ -78,7 +78,7 @@ High Voltage ion sweeper 1K-5KV range, when user pressed h show the prompt HV [0
 |  L3    |       |
 |  L4    | PSU_TEC FANS
 |  L5    |       |
-|  L6    |       |
+|  L6    | BLED3 |
 |  L7    |       |
 |  L8    |       |
 |  L9    | LED Left

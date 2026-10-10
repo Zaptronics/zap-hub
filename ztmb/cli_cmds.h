@@ -26,6 +26,7 @@ void cli_run_tick(void);
 void cli_run_closed(void);
 /* Keeps Run's protection and sequences going while Run is off screen. */
 void cli_run_background(void);
+bool cli_run_song_playing(void);
 //void cmd_help(void);
 //void cmd_status(void);
 int handle_command(char *cmd, char *out, size_t out_len);

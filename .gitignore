@@ -3,7 +3,8 @@
 /.cache/
 /deps/
 /zap.exe
-/zap
+/zap/
 *.patch
 .vscode/
 putty*.*
+zap.exe

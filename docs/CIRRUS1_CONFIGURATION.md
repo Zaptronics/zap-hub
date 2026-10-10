@@ -10,7 +10,7 @@ Source: ../notes/cirrus1-configuration.md. Chamber-specific constants live in
 | Return/sump | motor 2 | forward 100 steps/s |
 | TEC fans | PWM L4 | 0 or 100% only; Run turns them on before any TEC start and keeps them on while a TEC runs |
 | Left/right lights | PWM L9/L10 | Standby low light 20% (placeholder) |
-| ITO glass heater | PWM L12 | Run caps at 50%, Standby 0% (placeholders; no glass sensor) |
+| ITO glass heater | PWM L12 | Run allows 0-100% (cap removed in 0.6.20), Standby 0% (placeholder; no glass sensor) |
 | Exhaust/intake | FAN3/FAN6 | presets 30/50/90% open loop, then both locked to the slower fan's RPM (closed-loop floor 20%) |
 | C/B/W2/W1/L1/L2 | document RT2/RT3/RT4/RT5/RT6/RT7 | ADC API channels 3/4/5/6/7/8 |
 | CB / TEC2 | document TC0/TC1, K-type | ADC API channels 1/2: chiller return pipe, PSU_TEC 2 heat-sink |

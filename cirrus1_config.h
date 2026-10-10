@@ -46,15 +46,40 @@
 #define CIRRUS1_TRIP_CB_C          35.0 /* CB (chiller return) above */
 #define CIRRUS1_TRIP_PLATE_HIGH_C  45.0 /* any plate RTD above: plate heating */
 #define CIRRUS1_TRIP_PLATE_LOW_C  -50.0 /* any plate RTD below */
-/* TEC start needs a valid CB reading at or below this ("chiller ready"). */
-#define CIRRUS1_CB_READY_C         25.0
+/* TEC start needs a valid CB reading at or below this ("chiller ready").
+ * Was 25 (placeholder); now matches the CB interlock below. */
+#define CIRRUS1_CB_READY_C         4.0
+/* CB interlock (Dave, 2026-10-08): the TEC permit is granted automatically
+ * when CB drops below UNLOCK, and revoked with all four TECs stopped when CB
+ * rises above LOCK or reads open circuit. CB is read every CB_PERIOD_MS,
+ * whether or not Run is open. */
+#define CIRRUS1_CB_UNLOCK_C        4.0 /* was 0; Dave 2026-10-10: below 4 C is safe */
+#define CIRRUS1_CB_LOCK_C          4.0
+#define CIRRUS1_CB_PERIOD_MS       2000u
+/* Run colour bands (Dave, 2026-10-08): green to 40, orange 40..60, flashing
+ * red above 60. CB stays orange until at or below CIRRUS1_CB_LOCK_C. */
+#define CIRRUS1_TEMP_ORANGE_C      40.0
+#define CIRRUS1_TEMP_RED_C         60.0
+/* TEC2 heat-sink above this turns the TEC fans (L4) on automatically; TEC2
+ * is read at least every TEC2_PERIOD_MS, Run open or not. */
+#define CIRRUS1_TEC2_FANS_ON_C     40.0
+#define CIRRUS1_TEC2_PERIOD_MS     4000u
+/* Glass at or above this duty reading under GLASS_OC_MA flashes red (open
+ * heater). Lower duties often read 0 mA, so they are not flagged. */
+#define CIRRUS1_GLASS_OC_MIN_PCT   20u
+#define CIRRUS1_GLASS_OC_MA        10u
+/* Glass duty for the "on" half of each tone cycle (100 = clean square). */
+#define CIRRUS1_SONG_LEVEL_PCT     100u
+/* After a locked `t`, Run waits this long for K (permit) before dropping it. */
+#define CIRRUS1_TEC_CONFIRM_MS     10000u
 /* A CB or TEC2 fault on this many reads in a row trips the TECs. */
 #define CIRRUS1_SENSOR_FAULT_READS 2u
 /* A running fan below this RPM on this many 1 s reads in a row stops both. */
 #define CIRRUS1_FAN_STALL_RPM      200u
 #define CIRRUS1_FAN_STALL_READS    3u
-/* The ITO glass heater has no sensor; Run caps its prompt here until rated. */
-#define CIRRUS1_GLASS_MAX_PCT      50u
+/* ITO glass heater prompt limit. The 50% cap was removed at Dave's request
+ * (2026-10-08); the glass still has no temperature sensor. */
+#define CIRRUS1_GLASS_MAX_PCT      100u
 
 /* Run sequences (keys 2-6, pressed twice). PLACEHOLDER values chosen to be
  * mild; replace with confirmed operating targets. Go has no values yet. */

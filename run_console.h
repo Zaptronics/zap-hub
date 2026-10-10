@@ -30,11 +30,11 @@ typedef struct {
     const char *hint; /* printf format; any %u is max */
 } run_prompt_def_t;
 static const run_prompt_def_t run_prompt_defs[] = {
-    { 't', "TEC",       100u, true,  "Enter 0-%u%%. Non-zero needs permit, chiller ready (CB) and turns TEC fans on." },
+    { 't', "TEC",       100u, true,  "Enter 0-%u%%. Non-zero needs permit (K if locked), CB ready and turns TEC fans on." },
     { 'h', "HV",        100u, true,  "Enter 0-%u%% of the calibrated HV range. 0 turns HV off." },
     { 'l', "LED LEFT",  100u, true,  "Enter 0-%u%%. 0 turns the left LEDs off." },
     { 'r', "LED RIGHT", 100u, true,  "Enter 0-%u%%. 0 turns the right LEDs off." },
-    { 'g', "GLASS",     CIRRUS1_GLASS_MAX_PCT, true, "Enter 0-%u%% ITO glass heat (capped; no glass sensor)." },
+    { 'g', "GLASS",     CIRRUS1_GLASS_MAX_PCT, true, "Enter 0-%u%% ITO glass heat (no glass sensor)." },
     { 'c', "TEC FANS 0-1", 1u, false, "Enter 1 on or 0 off. TEC fans stay on while any TEC is on." },
     { 'f', "FANS 0-3",  3u,   false, "Enter 0 off, 1 low 30%%, 2 moderate 50%%, 3 high 90%%." },
     { 'p', "PUMPS 0-3", 3u,   false, "Enter 0 filter and return off, 1 filter, 2 return, 3 both." },
@@ -91,6 +91,11 @@ typedef struct {
 static run_reading_t run_readings[RUN_SENSOR_COUNT];
 static unsigned run_sensor_next;
 static uint32_t run_sensor_at;
+static uint32_t run_cb_at;  /* last CB read, for the CB interlock */
+static uint32_t run_tec2_at; /* last TEC2 read, for TEC fan auto-on */
+static bool run_cb_cold;    /* CB has been below the unlock limit */
+static uint8_t run_tec_pending;     /* TEC % waiting for K while locked */
+static uint32_t run_tec_pending_at;
 
 /* Fan presets from notes/cirrus1-configuration.md. Both fans start open loop
  * at the preset duty; after settling, both are locked to the slower fan's RPM
@@ -108,6 +113,7 @@ static uint32_t run_fan_rpm[2];
 static bool run_fan_rpm_ok[2];
 static uint32_t run_fan_read_at;
 static unsigned run_fan_stall[2]; /* consecutive slow reads per fan */
+static bool run_fan_stalled[2];   /* this fan tripped the stall stop */
 
 /* Colour layout for a 120x40 ANSI terminal with UTF-8 line drawing. Rows
  * hold styled bytes (SGR colour codes and 3-byte UTF-8 box characters), so
@@ -144,6 +150,10 @@ static bool run_screen_valid;
 #define RUN_ON_BLUE  "\033[44m"
 #define RUN_ON_RED   "\033[41m"
 #define RUN_ON_GREEN "\033[42m"
+#define RUN_ORANGE   "\033[38;5;208m"  /* 256-colour orange (PuTTY supports it) */
+#define RUN_BLINK    "\033[5m"
+/* Flashing red: faults and over-temperature that need the user's attention. */
+#define RUN_ALERT    RUN_BLINK RUN_BOLD RUN_RED
 #define RUN_H   "\xe2\x94\x80"
 #define RUN_V   "\xe2\x94\x82"
 #define RUN_TL  "\xe2\x94\x8c"
@@ -387,12 +397,8 @@ static unsigned run_prompt_current(char key)
     }
 }
 
-static void run_sensor_poll(void)
+static void run_sensor_read(unsigned i)
 {
-    if (!ztm_adc_ready(&ztm_adc_1)) return;
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if ((uint32_t)(now - run_sensor_at) < RUN_SENSOR_PERIOD_MS) return;
-    unsigned i = run_sensor_next;
     run_reading_t *r = &run_readings[i];
     if (run_sensors[i].kind == RUN_TC) {
         ztm_adc_tc_sample_t tc = {0};
@@ -414,9 +420,48 @@ static void run_sensor_poll(void)
         if (!r->ranged || r->celsius > r->high) r->high = r->celsius;
         r->ranged = true;
     }
-    run_sensor_next = (i + 1u) % RUN_SENSOR_COUNT;
+    if (i == RUN_S_CB) run_cb_at = to_ms_since_boot(get_absolute_time());
+    if (i == RUN_S_TEC2) run_tec2_at = to_ms_since_boot(get_absolute_time());
+}
+
+static bool run_tec2_due(void)
+{
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    return !run_readings[RUN_S_TEC2].seen ||
+           (uint32_t)(now - run_tec2_at) >= CIRRUS1_TEC2_PERIOD_MS;
+}
+
+static bool run_cb_due(void)
+{
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    return !run_readings[RUN_S_CB].seen || (uint32_t)(now - run_cb_at) >= CIRRUS1_CB_PERIOD_MS;
+}
+
+/* One sensor per call. CB takes priority whenever its interlock read is due
+ * (about every fourth slot); the others rotate through the remaining slots. */
+static void run_sensor_poll(void)
+{
+    if (!ztm_adc_ready(&ztm_adc_1)) return;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if ((uint32_t)(now - run_sensor_at) < RUN_SENSOR_PERIOD_MS) return;
+    if (run_cb_due()) {
+        run_sensor_read(RUN_S_CB);
+    } else {
+        if (run_sensor_next == RUN_S_CB) run_sensor_next = (run_sensor_next + 1u) % RUN_SENSOR_COUNT;
+        run_sensor_read(run_sensor_next);
+        run_sensor_next = (run_sensor_next + 1u) % RUN_SENSOR_COUNT;
+    }
     /* Measured after the read so a slow conversion cannot run back to back. */
     run_sensor_at = to_ms_since_boot(get_absolute_time());
+}
+
+/* CB (interlock) and TEC2 (fan auto-on) only, while nothing else needs the
+ * sensors. At most one conversion per call; CB first. */
+static void run_cb_poll(void)
+{
+    if (!ztm_adc_ready(&ztm_adc_1)) return;
+    if (run_cb_due()) run_sensor_read(RUN_S_CB);
+    else if (run_tec2_due()) run_sensor_read(RUN_S_TEC2);
 }
 
 static bool run_reading_ok(unsigned i)
@@ -425,12 +470,30 @@ static bool run_reading_ok(unsigned i)
            run_readings[i].status == ZTM_ADC_SENSOR_OK;
 }
 
-/* Colour bands are for reading at a glance, not limits: blue very cold,
- * cyan cold, green ambient, yellow warm, red hot. */
-static const char *run_temp_color(double celsius)
+/* TEC2 heat-sink above CIRRUS1_TEC2_FANS_ON_C turns the TEC fans (L4) on,
+ * whether or not Run is open. It never turns them off. */
+static void run_tec2_fans(void)
 {
-    return celsius < -20.0 ? RUN_BLUE : celsius < 5.0 ? RUN_CYAN
-         : celsius < 30.0 ? RUN_GREEN : celsius < 45.0 ? RUN_YELLOW : RUN_RED;
+    const run_reading_t *r = &run_readings[RUN_S_TEC2];
+    if (!run_reading_ok(RUN_S_TEC2) || r->celsius <= CIRRUS1_TEC2_FANS_ON_C) return;
+    if (!ztm_pwm_operational(&ztm_pwm_1) || ztm_pwm_channel_get_duty(&ztm_pwm_1, CIRRUS1_TEC_FANS_LOAD))
+        return;
+    bool ok = ztm_pwm_channel_set(&ztm_pwm_1, CIRRUS1_TEC_FANS_LOAD, 100u);
+    (void)snprintf(run_result, sizeof(run_result),
+                   ok ? "TEC2 heat-sink %.1f" RUN_DEG "C above %.0f: TEC fans turned on automatically."
+                      : "TEC2 heat-sink %.1f" RUN_DEG "C above %.0f: TEC fans auto-on FAILED.",
+                   r->celsius, CIRRUS1_TEC2_FANS_ON_C);
+    run_notice = run_result;
+}
+
+/* Colour bands (Dave, 0.6.30): green up to 40, orange 40..60, flashing red
+ * above 60. CB is orange until it is in the safe TEC run zone (at or below
+ * CIRRUS1_CB_LOCK_C), then green. */
+static const char *run_temp_color_for(unsigned i, double celsius)
+{
+    if (celsius > CIRRUS1_TEMP_RED_C) return RUN_ALERT;
+    if (i == RUN_S_CB) return celsius <= CIRRUS1_CB_LOCK_C ? RUN_GREEN : RUN_ORANGE;
+    return celsius > CIRRUS1_TEMP_ORANGE_C ? RUN_ORANGE : RUN_GREEN;
 }
 
 /* "<name> <value>" where value is degrees C or a short fault word. */
@@ -440,13 +503,13 @@ static void run_format_reading(unsigned i, char *text, size_t size)
     const char *name = run_sensors[i].name;
     if (run_reading_ok(i))
         (void)snprintf(text, size, RUN_WHITE "%s " RUN_BOLD "%s%.1f" RUN_RESET,
-                       name, run_temp_color(r->celsius), r->celsius);
+                       name, run_temp_color_for(i, r->celsius), r->celsius);
     else if (!r->seen)
         (void)snprintf(text, size, RUN_WHITE "%s " RUN_DIM "--" RUN_RESET, name);
     else
-        (void)snprintf(text, size, RUN_WHITE "%s " RUN_MAGENTA "%s" RUN_RESET, name,
+        (void)snprintf(text, size, RUN_WHITE "%s " RUN_ALERT "%s" RUN_RESET, name,
                        !r->valid ? "ERR"
-                       : r->status == ZTM_ADC_SENSOR_DISCONNECTED ? "open"
+                       : r->status == ZTM_ADC_SENSOR_DISCONNECTED ? "O/C"
                        : r->status == ZTM_ADC_SENSOR_CJC_UNAVAILABLE ? "noCJC" : "range");
 }
 
@@ -479,6 +542,7 @@ static void run_fan_poll(void)
         bool ok = ztm_pwm_fan_stop(&ztm_pwm_1, CIRRUS1_EXHAUST_FAN);
         ok = ztm_pwm_fan_stop(&ztm_pwm_1, CIRRUS1_INTAKE_FAN) && ok;
         run_fans_off();
+        run_fan_stalled[i] = true;
         run_fan_stall[0] = run_fan_stall[1] = 0u;
         (void)snprintf(run_result, sizeof(run_result),
                        "FAN STALL: %s fan F%u below %u RPM; both fans %s.",
@@ -528,6 +592,48 @@ static void run_vsense_poll(void)
     if (!cooling_ready() || (uint32_t)(now - run_vsense_at) < 1000u) return;
     run_vsense_at = now;
     run_vsense_ok = cooling_tec_read_all(run_vsense);
+}
+
+/* PWM load current (PAC195x via ztm_pwm), averaged, for display only. One
+ * load is read every 250 ms, so each refreshes about once a second. */
+static const uint8_t run_load_ch[4] = {
+    CIRRUS1_LED_LEFT_LOAD, CIRRUS1_LED_RIGHT_LOAD, CIRRUS1_GLASS_HEATER_LOAD, CIRRUS1_TEC_FANS_LOAD
+};
+static int32_t run_load_uA[4];
+static bool run_load_ok[4];
+static unsigned run_load_next;
+static uint32_t run_load_at;
+
+static void run_current_poll(void)
+{
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if ((uint32_t)(now - run_load_at) < 250u) return;
+    run_load_at = now;
+    unsigned i = run_load_next;
+    run_load_next = (i + 1u) % 4u;
+    run_load_ok[i] = ztm_pwm_read_current_uA(&ztm_pwm_1, run_load_ch[i], true, &run_load_uA[i]);
+}
+
+/* Five visible columns: "123mA", "1.23A" or " --  ". */
+static const char *run_load_text(unsigned i, char *buf, size_t size)
+{
+    if (!run_load_ok[i]) {
+        (void)snprintf(buf, size, RUN_DIM " --  " RUN_RESET);
+        return buf;
+    }
+    long mA = run_load_uA[i] > 0 ? (long)((run_load_uA[i] + 500) / 1000) : 0L;
+    const char *color = mA > 0 ? RUN_BOLD RUN_GREEN : RUN_DIM;
+    /* Glass driven hard enough to read but drawing (almost) nothing: likely
+     * an open heater or connection. Low duty often reads 0, so not flagged. */
+    if (run_load_ch[i] == CIRRUS1_GLASS_HEATER_LOAD &&
+        ztm_pwm_channel_get_duty(&ztm_pwm_1, CIRRUS1_GLASS_HEATER_LOAD) >= CIRRUS1_GLASS_OC_MIN_PCT &&
+        mA < (long)CIRRUS1_GLASS_OC_MA)
+        color = RUN_ALERT;
+    if (mA < 1000)
+        (void)snprintf(buf, size, "%s%3ldmA" RUN_RESET, color, mA);
+    else
+        (void)snprintf(buf, size, "%s%4.2fA" RUN_RESET, color, (double)mA / 1000.0);
+    return buf;
 }
 
 /* False, with the reason in why, when the TECs must not run. starting
@@ -602,6 +708,45 @@ static void run_protect(void)
     }
     char why[80];
     if (!run_tec_check(false, why, sizeof(why))) run_tec_trip(why);
+}
+
+/* CB interlock: CB below CIRRUS1_CB_UNLOCK_C grants the TEC permit once per
+ * cold spell (a STOP or revoke while cold stays locked until `tec permit` or
+ * the next cold spell). CB above CIRRUS1_CB_LOCK_C, open circuit, or another
+ * fault on repeated reads revokes the permit and stops all four TECs,
+ * however they were started. */
+static void run_cb_interlock(void)
+{
+    const run_reading_t *r = &run_readings[RUN_S_CB];
+    if (!cooling_ready() || !r->seen) return;
+    bool ok = run_reading_ok(RUN_S_CB);
+    bool fault = !ok && (r->status == ZTM_ADC_SENSOR_DISCONNECTED ||
+                         r->faults >= CIRRUS1_SENSOR_FAULT_READS);
+    if (fault || (ok && r->celsius > CIRRUS1_CB_LOCK_C)) {
+        run_cb_cold = false;
+        if (cooling_tec_permission_granted()) {
+            char why[80];
+            if (fault)
+                (void)snprintf(why, sizeof(why), "CB sensor %s",
+                               r->status == ZTM_ADC_SENSOR_DISCONNECTED ? "open circuit" : "fault");
+            else
+                (void)snprintf(why, sizeof(why), "CB %.1f" RUN_DEG "C above %.0f", r->celsius,
+                               CIRRUS1_CB_LOCK_C);
+            run_tec_trip(why);
+        }
+        return;
+    }
+    if (ok && r->celsius < CIRRUS1_CB_UNLOCK_C && !run_cb_cold) {
+        run_cb_cold = true;
+        if (!cooling_tec_permission_granted()) {
+            bool granted = cooling_tec_confirm_chiller();
+            (void)snprintf(run_result, sizeof(run_result),
+                           granted ? "CB %.1f" RUN_DEG "C below %.0f: TEC permit granted automatically."
+                                   : "CB %.1f" RUN_DEG "C below %.0f, but the TEC permit could not be granted.",
+                           r->celsius, CIRRUS1_CB_UNLOCK_C);
+            run_notice = run_result;
+        }
+    }
 }
 
 /* Heap free = space between the end of static data and the stack limit,
@@ -733,8 +878,8 @@ static void run_build_temperatures(run_panel_t *p)
         char entry[96];
         if (r->ranged)
             (void)snprintf(entry, sizeof(entry), RUN_WHITE "%s " "%s%.1f" RUN_RESET RUN_DIM ".." RUN_RESET "%s%.1f" RUN_RESET,
-                           run_sensors[i].name, run_temp_color(r->low), r->low,
-                           run_temp_color(r->high), r->high);
+                           run_sensors[i].name, run_temp_color_for(i, r->low), r->low,
+                           run_temp_color_for(i, r->high), r->high);
         else
             (void)snprintf(entry, sizeof(entry), RUN_WHITE "%s " RUN_DIM "--" RUN_RESET, run_sensors[i].name);
         run_append_cell(line, sizeof(line), entry, 21u);
@@ -766,7 +911,7 @@ static void run_build_status(run_panel_t *p)
     run_panel_printf(p, "Chiller %s" RUN_RESET " (CB " RUN_DEG "C <= %.0f)  " RUN_DIM RUN_DOT RUN_RESET
                      "  TEC trips: sink > %.0f, CB > %.0f, plate %.0f..%.0f, TEC fans off, sensor fault",
                      ready ? RUN_GREEN RUN_BOLD "READY" : cb_ok ? RUN_YELLOW RUN_BOLD "NOT READY" : RUN_MAGENTA "CB ?",
-                     CIRRUS1_CB_READY_C, CIRRUS1_TRIP_HEATSINK_C, CIRRUS1_TRIP_CB_C,
+                     CIRRUS1_CB_READY_C, CIRRUS1_TRIP_HEATSINK_C, CIRRUS1_CB_LOCK_C,
                      CIRRUS1_TRIP_PLATE_LOW_C, CIRRUS1_TRIP_PLATE_HIGH_C);
     run_panel_printf(p, "Last TEC trip  %s%s" RUN_RESET,
                      run_trip[0] ? RUN_RED RUN_BOLD : RUN_DIM, run_trip[0] ? run_trip : "none");
@@ -802,10 +947,13 @@ static void run_build_outputs(run_panel_t *p)
                          run_level_color(run_hv_percent), (unsigned)run_hv_percent, (double)run_hv_mV / 1e6);
     else
         run_panel_printf(p, "HV       %s%3u%%" RUN_RESET, run_level_color(0u), 0u);
-    run_panel_printf(p, "LED L    %s%3u%%" RUN_RESET "  LED R  %s%3u%%" RUN_RESET,
-                     run_level_color(left), left, run_level_color(right), right);
-    run_panel_printf(p, "Glass    %s%3u%%" RUN_RESET "  TEC fans %s" RUN_RESET,
-                     run_level_color(glass), glass, tec_fans ? RUN_BOLD RUN_GREEN "ON" : RUN_DIM "off");
+    char a[48], b[48];
+    run_panel_printf(p, "LED L  %s%3u%%" RUN_RESET " %s  LED R  %s%3u%%" RUN_RESET " %s",
+                     run_level_color(left), left, run_load_text(0, a, sizeof(a)),
+                     run_level_color(right), right, run_load_text(1, b, sizeof(b)));
+    run_panel_printf(p, "Glass  %s%3u%%" RUN_RESET " %s  TEC fan %s" RUN_RESET " %s",
+                     run_level_color(glass), glass, run_load_text(2, a, sizeof(a)),
+                     tec_fans ? RUN_BOLD RUN_GREEN " ON" : RUN_DIM "off", run_load_text(3, b, sizeof(b)));
     run_panel_printf(p, "PWM POWER_SAFE rc %s%d" RUN_RESET,
                      ztm_pwm_1.power_safe_rc ? RUN_RED RUN_BOLD : RUN_GREEN, ztm_pwm_1.power_safe_rc);
 }
@@ -820,11 +968,13 @@ static void run_build_fans(run_panel_t *p)
     const char *names[2] = { "Exhaust", "Intake " };
     const unsigned ids[2] = { CIRRUS1_EXHAUST_FAN, CIRRUS1_INTAKE_FAN };
     for (unsigned i = 0; i < 2u; ++i) {
+        const char *stall = run_fan_stalled[i] ? "  " RUN_ALERT "STALL" RUN_RESET : "";
         if (run_fan_rpm_ok[i])
-            run_panel_printf(p, "%s  F%u  " RUN_BOLD RUN_WHITE "%5lu" RUN_RESET " rpm",
-                             names[i], ids[i], (unsigned long)run_fan_rpm[i]);
+            run_panel_printf(p, "%s  F%u  %s%5lu" RUN_RESET " rpm%s",
+                             names[i], ids[i], run_fan_stall[i] ? RUN_ALERT : RUN_BOLD RUN_WHITE,
+                             (unsigned long)run_fan_rpm[i], stall);
         else
-            run_panel_printf(p, "%s  F%u  " RUN_DIM "   --" RUN_RESET " rpm", names[i], ids[i]);
+            run_panel_printf(p, "%s  F%u  " RUN_DIM "   --" RUN_RESET " rpm%s", names[i], ids[i], stall);
     }
     if (run_fan_phase == RUN_FANS_MATCHED)
         run_panel_printf(p, "Target       " RUN_GREEN RUN_BOLD "%5lu" RUN_RESET " rpm (shared)",
@@ -902,6 +1052,7 @@ static void run_frame_footer(void)
                     RUN_REVERSE " p " RUN_RESET " pumps   "
                     RUN_REVERSE " w " RUN_RESET " wick\r\n");
     run_frame_write(" " RUN_REVERSE " 1-6 " RUN_RESET " modes   "
+                    RUN_REVERSE " k " RUN_RESET " TEC permit   "
                     RUN_REVERSE " ESC " RUN_RESET " leave   "
                     RUN_ON_RED RUN_WHITE RUN_BOLD " SPACE " RUN_RESET " "
                     RUN_ON_RED RUN_WHITE RUN_BOLD " 7 " RUN_RESET RUN_RED RUN_BOLD " STOP" RUN_RESET
@@ -940,6 +1091,7 @@ static void run_stop(void)
     run_safe_seen = cmd_safe_requests;
     run_active = 7;
     run_armed = 0;
+    run_tec_pending = 0;
     run_tec_percent = 0;
     run_hv_percent = 0;
     run_hv_mV = 0;
@@ -961,9 +1113,16 @@ static void run_apply_tec(unsigned percent)
         return;
     }
     if (!cooling_tec_permission_granted()) {
-        run_notice = "TEC LOCKED: leave Run and use 'tec permit' after checking the chiller.";
+        run_tec_pending = (uint8_t)percent;
+        run_tec_pending_at = to_ms_since_boot(get_absolute_time());
+        (void)snprintf(run_result, sizeof(run_result),
+                       "TEC LOCKED. Chiller at temperature and circulating? Press K within %u s to "
+                       "grant the permit and start TEC %u%%.",
+                       CIRRUS1_TEC_CONFIRM_MS / 1000u, percent);
+        run_notice = run_result;
         return;
     }
+    run_tec_pending = 0;
     /* TEC fans first: the TECs never run without them. */
     if (!ztm_pwm_channel_set(&ztm_pwm_1, CIRRUS1_TEC_FANS_LOAD, 100u)) {
         run_notice = "TEC not started: TEC fans could not be turned on.";
@@ -1084,6 +1243,7 @@ static void run_apply_wick(unsigned mode)
 static void run_apply_fans(unsigned level)
 {
     bool ok;
+    run_fan_stalled[0] = run_fan_stalled[1] = false;
     if (level == 0u) {
         ok = ztm_pwm_fan_stop(&ztm_pwm_1, CIRRUS1_EXHAUST_FAN);
         ok = ztm_pwm_fan_stop(&ztm_pwm_1, CIRRUS1_INTAKE_FAN) && ok;
@@ -1347,6 +1507,157 @@ static void run_prompt_key(uint8_t byte)
     }
 }
 
+/* Undocumented: z plays a tune on the ITO glass (it is audibly
+ * electro-acoustic). The SX1509 PWM carrier can only change in octave steps
+ * and is shared by all 16 outputs, so the tune gates L12 on and off over I2C
+ * at each note's pitch instead: a square wave, C64 style. Main loop only,
+ * in slices that hold the lwIP lock (no bus overlap with Run or commands)
+ * and then release it so the network, Space and z stay responsive. Allowed
+ * in Standby (2) or Shutdown (6); STOP, safe or a mode change aborts it. */
+#define RUN_SONG_SLICE_US 15000u
+/* Equal temperament, Hz (only the notes the tune uses), one octave above
+ * the MIDI file at Dave's request. */
+#define RUN_A3 220
+#define RUN_CS4 277
+#define RUN_D4 294
+#define RUN_E4 330
+#define RUN_FS4 370
+typedef struct { uint16_t hz; uint16_t ms; } run_note_t;
+/* Dave's vocal melody, notes/particle_man_vocal_melody.mid (190 bpm, 4/4),
+ * converted note for note: start/end ticks to ms, gaps as rests (0 Hz). */
+static const run_note_t run_song[] = {
+    { RUN_CS4, 158 }, { RUN_CS4, 158 }, { RUN_CS4, 158 }, { RUN_E4, 789 }, { RUN_CS4, 158 }, { RUN_CS4, 158 },
+    { RUN_CS4, 158 }, { RUN_A3, 474 }, { 0, 316 }, { RUN_CS4, 158 }, { RUN_CS4, 158 }, { RUN_CS4, 158 },
+    { RUN_E4, 632 }, { RUN_E4, 158 }, { RUN_FS4, 158 }, { RUN_E4, 158 }, { RUN_E4, 158 }, { RUN_E4, 474 },
+    { 0, 316 }, { RUN_D4, 316 }, { RUN_D4, 158 }, { RUN_FS4, 632 }, { RUN_FS4, 158 }, { RUN_E4, 158 },
+    { RUN_E4, 316 }, { RUN_CS4, 474 }, { RUN_CS4, 316 }, { RUN_CS4, 158 }, { RUN_CS4, 158 }, { RUN_CS4, 158 },
+    { RUN_A3, 632 },
+};
+#define RUN_SONG_NOTES (sizeof(run_song) / sizeof(run_song[0]))
+
+static bool run_song_on;
+static unsigned run_song_idx;
+static uint64_t run_song_note_at;  /* us */
+static uint8_t run_song_glass;     /* L12 duty to restore afterwards */
+static uint8_t run_song_written;   /* last duty written to L12 */
+static unsigned run_song_mode;
+static unsigned run_song_safe;
+static unsigned run_song_octave;   /* 0 for z, 1 for x (one octave higher) */
+
+static bool run_song_mode_ok(void)
+{
+    return run_active == 2u || run_active == 6u;
+}
+
+static void run_song_end(bool restore, const char *why)
+{
+    run_song_on = false;
+    if (restore) (void)ztm_pwm_channel_set(&ztm_pwm_1, CIRRUS1_GLASS_HEATER_LOAD, run_song_glass);
+    run_notice = why;
+}
+
+static void run_song_start(unsigned octave)
+{
+    run_song_octave = octave;
+    run_song_glass = ztm_pwm_channel_get_duty(&ztm_pwm_1, CIRRUS1_GLASS_HEATER_LOAD);
+    run_song_written = run_song_glass;
+    run_song_mode = run_active;
+    run_song_safe = cmd_safe_requests;
+    run_song_idx = 0;
+    run_song_note_at = time_us_64();
+    run_song_on = true;
+    run_notice = "\xe2\x99\xaa Particle man, particle man...";
+}
+
+/* z (or x, one octave higher): play once through. z or x while playing does
+ * nothing; only STOP, safe or a mode change ends it early. */
+static bool run_song_key(unsigned octave)
+{
+    if (run_song_on) return true;
+    if (!run_song_mode_ok() || !ztm_pwm_operational(&ztm_pwm_1)) return false;
+    run_song_start(octave);
+    return true;
+}
+
+static void run_song_slice(void)
+{
+    /* A STOP or safe already zeroed the outputs: stop without writing. */
+    if (run_active == 7u || run_song_safe != cmd_safe_requests) {
+        run_song_end(false, run_notice);
+        return;
+    }
+    if (run_active != run_song_mode) {
+        run_song_end(true, "Tune stopped: mode changed.");
+        return;
+    }
+    uint64_t end = time_us_64() + RUN_SONG_SLICE_US;
+    for (uint64_t now = time_us_64(); now < end; now = time_us_64()) {
+        unsigned level = CIRRUS1_SONG_LEVEL_PCT;
+        uint64_t in = now - run_song_note_at;
+        if (in >= (uint64_t)run_song[run_song_idx].ms * 1000u) {
+            run_song_note_at += (uint64_t)run_song[run_song_idx].ms * 1000u;
+            if (++run_song_idx >= RUN_SONG_NOTES) {
+                run_song_end(true, "\xe2\x99\xaa That's the song. Particle man!");
+                return;
+            }
+            in = now - run_song_note_at;
+        }
+        const run_note_t *n = &run_song[run_song_idx];
+        uint8_t duty = 0u;
+        /* Sound 85% of each note so repeated notes are heard separately. */
+        if (n->hz && in < (uint64_t)n->ms * 850u) {
+            uint64_t half = 500000u / ((uint32_t)n->hz << run_song_octave);
+            duty = ((in / half) & 1u) ? 0u : (uint8_t)level;
+        }
+        if (duty != run_song_written) {
+            if (!ztm_pwm_channel_set(&ztm_pwm_1, CIRRUS1_GLASS_HEATER_LOAD, duty)) {
+                (void)ztm_pwm_channel_set(&ztm_pwm_1, CIRRUS1_GLASS_HEATER_LOAD, 0u);
+                run_song_end(false, "Tune stopped: glass write failed; glass set to 0%.");
+                return;
+            }
+            run_song_written = duty;
+        }
+    }
+}
+
+/* K: Run's equivalent of `tec permit chiller-at-temperature-and-circulating`.
+ * Grants the permit only with a valid CB reading at or below
+ * CIRRUS1_CB_LOCK_C, then starts the TEC %
+ * a locked `t` left pending within CIRRUS1_TEC_CONFIRM_MS. */
+static void run_permit_key(void)
+{
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    unsigned pending = run_tec_pending &&
+                       (uint32_t)(now - run_tec_pending_at) <= CIRRUS1_TEC_CONFIRM_MS
+                           ? run_tec_pending : 0u;
+    run_tec_pending = 0;
+    if (!cooling_tec_permission_granted()) {
+        const run_reading_t *r = &run_readings[RUN_S_CB];
+        if (!run_reading_ok(RUN_S_CB)) {
+            run_notice = "Permit refused: no valid CB reading.";
+            return;
+        }
+        /* K never bypasses the CB rule: CB must be at or below the lock limit
+         * (4 C since 0.6.31; exactly 4.0 C is accepted). */
+        if (!(r->celsius <= CIRRUS1_CB_LOCK_C)) {
+            (void)snprintf(run_result, sizeof(run_result),
+                           "Permit refused: CB %.1f" RUN_DEG "C is above %.0f.", r->celsius,
+                           CIRRUS1_CB_LOCK_C);
+            run_notice = run_result;
+            return;
+        }
+        if (!cooling_tec_confirm_chiller()) {
+            run_notice = "Permit FAILED; all TECs off.";
+            return;
+        }
+        run_cb_cold = true;
+        run_notice = "TEC permit granted (K).";
+    } else {
+        run_notice = "TEC permit already granted.";
+    }
+    if (pending) run_apply_tec(pending);
+}
+
 void cli_run_key(uint8_t byte)
 {
     if (!run_visible) return;
@@ -1394,10 +1705,14 @@ void cli_run_key(uint8_t byte)
             run_prompt_text[0] = '\0';
             (void)snprintf(run_result, sizeof(run_result), def->hint, def->max);
             run_notice = run_result;
+        } else if (key == 'k') {
+            run_permit_key();
+        } else if ((key == 'z' || key == 'x') && run_song_key(key == 'x' ? 1u : 0u)) {
+            /* undocumented */
         } else if (byte >= '1' && byte <= '6') {
             run_mode_key((unsigned)(byte - '0'));
         } else if (byte > ' ' && byte < 127u) {
-            run_notice = "Key ignored. Space or 7 = STOP; t h l r g c f p w = manual prompts.";
+            run_notice = "Key ignored. Space or 7 = STOP; t h l r g c f p w = manual prompts; k = TEC permit.";
         }
         /* Enter, NUL and other control bytes are ignored silently. */
     }
@@ -1412,6 +1727,7 @@ static void run_sync_safe(void)
     run_safe_seen = cmd_safe_requests;
     run_active = 7;
     run_armed = 0;
+    run_tec_pending = 0;
     run_tec_percent = 0;
     run_hv_percent = 0;
     run_hv_mV = 0;
@@ -1460,12 +1776,25 @@ void cli_run_tick(void)
         wifi_write("\r\ncirrus1> ");
         return;
     }
+    /* While the tune plays, skip the blocking sensor and bus reads (and the
+     * redraw) so the tone is not interrupted; they resume when it ends. */
+    if (run_song_on) return;
     run_sensor_poll();
     run_fan_poll();
     run_vsense_poll();
+    run_current_poll();
+    run_cb_interlock();
+    run_tec2_fans();
     run_protect();
     run_sequence_tick();
     run_draw();
+}
+
+/* For the main loop: true while the z tune plays, so the 1 s module polls
+ * can pause too. */
+bool cli_run_song_playing(void)
+{
+    return run_song_on;
 }
 
 void cli_run_closed(void)
@@ -1498,6 +1827,7 @@ static int cmd_run(int argc, char **argv, char *out, size_t out_len)
     run_escape_skip = 0;
     run_prompt = NULL;
     run_armed = 0;
+    run_tec_pending = 0;
     run_leave_armed = false;
     /* Mode, outputs, min..max and the last notice (including any trip while
      * Run was off screen) are kept from the previous visit. */
@@ -1512,21 +1842,32 @@ static int cmd_run(int argc, char **argv, char *out, size_t out_len)
  * and report any change (trip, stall, step) on the normal console. */
 void cli_run_background(void)
 {
-    if (run_visible || !run_notice) return;
+    if (run_song_on) {
+        cyw43_arch_lwip_begin();
+        if (run_song_on) run_song_slice();
+        cyw43_arch_lwip_end();
+        /* No CB read or other bus work between slices while it plays. */
+        if (run_song_on) return;
+    }
+    if (run_visible) return;
     bool fans = run_fan_phase != RUN_FANS_OFF;
-    if (!run_busy() && !fans) return;
+    /* The CB interlock runs from boot, even if Run was never opened. */
+    if (!run_busy() && !fans && !run_cb_due() && !run_tec2_due()) return;
     /* Commands, Run keys and network writes run in the lwIP background
      * context; hold its lock so this main-loop work never interleaves with
      * them on the ADC/PWM buses or the TCP connection. */
     cyw43_arch_lwip_begin();
     if (!run_visible) {
-        run_sync_safe();
-        uint32_t before = run_hash(run_notice);
+        if (run_notice) run_sync_safe();
+        uint32_t before = run_notice ? run_hash(run_notice) : 0u;
         if (run_tec_percent || run_active == 3u || run_active == 4u || run_active == 6u) run_sensor_poll();
+        else run_cb_poll();
         if (run_fan_phase != RUN_FANS_OFF) run_fan_poll();
+        run_cb_interlock();
+        run_tec2_fans();
         run_protect();
         run_sequence_tick();
-        if (run_hash(run_notice) != before) {
+        if (run_notice && run_hash(run_notice) != before) {
             wifi_write("\r\n[run] ");
             wifi_write(run_notice);
             wifi_write("\r\ncirrus1> ");

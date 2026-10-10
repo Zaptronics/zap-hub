@@ -1,8 +1,52 @@
 # Cloud chamber Hub
 
-Hub 0.6.18 requires local ZapEE 0.13.2 for normal-console server echo and
+Hub 0.6.31 requires local ZapEE 0.13.2 for normal-console server echo and
 backspace editing. Keep PuTTY Local echo and Local line editing both Force off;
 the same settings now support the command prompt and Run dashboard.
+
+
+CB interlock at 4 C (0.6.31): CB below 4 C unlocks the TECs; above 4 C or open
+circuit locks them and stops all four.
+
+
+Colours and TEC fan auto-on (0.6.30): TEC2 above 40 C turns the TEC fans on;
+new temperature colours and flashing red alerts in Run.
+
+
+0.6.29: small undocumented Run update; see CHANGELOG.
+
+
+0.6.28: small undocumented Run update; see CHANGELOG.
+
+
+0.6.27: small undocumented Run update; see CHANGELOG.
+
+
+0.6.26: small undocumented Run update; see CHANGELOG.
+
+
+0.6.25: a small undocumented addition to Run; see CHANGELOG.
+
+
+K permit (0.6.24): K accepts CB at or below 0 C.
+
+
+K permit (0.6.23): K requires CB strictly below 0 C.
+
+
+TEC permit in Run (0.6.22): after `t`, press K to confirm the chiller and start
+the TECs without leaving Run.
+
+
+CB interlock (0.6.21): CB below 0 C unlocks the TECs automatically; CB above
+0 C or open circuit locks them and stops all four TEC modules.
+
+
+Glass heater (0.6.20): the Run `g` prompt now accepts 0-100% (50% cap removed).
+
+
+Load currents (0.6.19): Run shows LED L/R, glass heater and TEC fan current
+next to each output, refreshed about once a second.
 
 
 Pump wiring (0.6.18): filter motor 1, return motor 2, wick motor 3; filter and
@@ -100,7 +144,7 @@ Hub owns the cloud chamber application running on ZTPICO2. ZapEE supplies the
 portable module/chip drivers, Pico motherboard support and optional shared services.
 The sibling Zap project is authoritative for package-manager behavior.
 
-Hub 0.6.18 consumes the local ../ZapEE source. After applying both migration
+Hub 0.6.31 consumes the local ../ZapEE source. After applying both migration
 patches, regenerate dependency files with your current Zap executable:
 
 ```powershell
